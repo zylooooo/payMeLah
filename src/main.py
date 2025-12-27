@@ -24,7 +24,7 @@ setup_logging(level=log_level, log_file=log_file)
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
+def main():
     """Main entry point for the bot application."""
     try:
         logger.info("=" * 50)
