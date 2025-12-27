@@ -1,6 +1,7 @@
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from bot.config import BOT_API_TOKEN, setup_commands
+from config import BOT_API_TOKEN
+from bot.config import setup_commands
 from bot.handlers import start_command
 import logging
 

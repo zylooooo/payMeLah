@@ -1,2 +1,5 @@
 python-telegram-bot==22.5
 python-dotenv==1.2.1
+sqlalchemy==2.0.45
+alembic==1.17.2
+psycopg2-binary==2.9.11

@@ -5,6 +5,15 @@ from pathlib import Path
 
 from bot.bot import Bot
 from shared.logger import setup_logging
+from infrastructure import init_db, close_db
+from models import ( # noqa: E402
+    User,
+    Group,
+    GroupMember,
+    Expense,
+    ExpenseParticipant,
+    Payment
+)
 
 # Set up logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
@@ -22,6 +31,12 @@ def main() -> None:
         logger.info("Starting PayMeLah Bot")
         logger.info("=" * 50)
 
+        # Initialize the database
+        # TODO: change the way the database is initialized when the FastAPI server is set up
+        logger.info('Initializing database...')
+        init_db()
+        logger.info('Database initialized successfully')
+
         bot = Bot()
         bot.start()
     
@@ -31,6 +46,9 @@ def main() -> None:
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
+    finally:
+        close_db()
+        logger.info("Database connections closed")
 
 
 if __name__ == "__main__":

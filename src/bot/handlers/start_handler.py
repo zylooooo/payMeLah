@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.config import BOT_NAME
+from config import BOT_NAME
 import logging
 
 logger = logging.getLogger(__name__)
