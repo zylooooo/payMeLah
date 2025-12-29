@@ -6,7 +6,6 @@ from pathlib import Path
 
 from bot.bot import Bot
 from shared.logger import setup_logging
-from infrastructure import close_db
 from config import AUTO_MIGRATE
 
 from models import ( # noqa: E402, F401
@@ -80,8 +79,7 @@ def main():
         logger.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        close_db()
-        logger.info("Database connections closed")
+        logger.info("Bot shutdown successfully")
 
 
 if __name__ == "__main__":

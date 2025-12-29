@@ -3,6 +3,7 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 import sys
+import re
 from pathlib import Path
 
 # Add parent directory to path to import your modules
@@ -25,11 +26,17 @@ from models import (  # noqa: E402, F401
 # this is the Alembic Config object
 config = context.config
 
+SYNC_DB_URL = re.sub(
+    r'^postgresql\+asyncpg://',
+    'postgresql+psycopg2://',
+    DB_URL
+)
+
 # Use DB_URL directly from environment configuration
 # In Docker: use 'postgres' as hostname (service name from docker-compose)
 # Locally: use 'localhost' as hostname
 # The DB_URL should be configured correctly in .env for each environment
-config.set_main_option('sqlalchemy.url', DB_URL)
+config.set_main_option('sqlalchemy.url', SYNC_DB_URL)
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:

@@ -3,6 +3,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from config import BOT_API_TOKEN
 from bot.config import setup_commands
 from bot.handlers import start_command
+from infrastructure import close_db
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,9 @@ class Bot:
 
         # Setup commands after the app starts
         self.app.post_init = self._setup_commands
+
+        # Setup cleanup function
+        self.app.post_shutdown = self._cleanup
 
         # Register the command handlers
         self.setup_handlers()
@@ -40,13 +44,17 @@ class Bot:
         """Handle errors in the bot."""
         logger.error("Exception while handling an update", exc_info=context.error)
     
+    async def _cleanup(self, app: Application):
+        """Cleanup function called when bot shuts down."""
+        await close_db()
+    
     def start(self):
         """Start the bot in polling mode."""
         logger.info("Starting bot in polling mode...")
         try:
             self.app.run_polling(
                 allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
+                drop_pending_updates=True,
             )
         except KeyboardInterrupt:
             logger.info("Bot stopped by user")
