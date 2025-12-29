@@ -1,12 +1,15 @@
 import logging
 import os
 import sys
+import subprocess
 from pathlib import Path
 
 from bot.bot import Bot
 from shared.logger import setup_logging
-from infrastructure import init_db, close_db
-from models import ( # noqa: E402
+from infrastructure import close_db
+from config import AUTO_MIGRATE
+
+from models import ( # noqa: E402, F401
     User,
     Group,
     GroupMember,
@@ -24,6 +27,39 @@ setup_logging(level=log_level, log_file=log_file)
 logger = logging.getLogger(__name__)
 
 
+def run_alembic_migrations():
+    """Run Alembic migrations upon startup if AUTO_MIGRATE is True"""
+    if not AUTO_MIGRATE:
+        logger.info("Alembic auto migration is disabled. Skipping database migrations...")
+        return
+    
+    logger.info("Running Alembic database migrations...")
+    try:
+        result = subprocess.run(
+            ['alembic', 'upgrade', 'head'],
+            cwd=Path(__file__).parent,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Check if any migrations were actually applied
+        if 'Running upgrade' in result.stdout:
+            logger.info("Applied pending migrations")
+        else:
+            logger.info("Database is up to date (no pending migrations)")
+            
+        if result.stdout:
+            logger.debug(f"Migration output: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Migration failed: {e.stderr}")
+        logger.error(f"Migration output: {e.stdout}")
+        raise
+    except FileNotFoundError:
+        logger.warning("Alembic not found. Ensure migrations are run manually.")
+        logger.warning("Run: alembic upgrade head")
+
+
 def main():
     """Main entry point for the bot application."""
     try:
@@ -31,11 +67,8 @@ def main():
         logger.info("Starting PayMeLah Bot")
         logger.info("=" * 50)
 
-        # Initialize the database
-        # TODO: change the way the database is initialized when the FastAPI server is set up
-        logger.info('Initializing database...')
-        init_db()
-        logger.info('Database initialized successfully')
+        # Database migrations on every startup
+        run_alembic_migrations()
 
         bot = Bot()
         bot.start()
