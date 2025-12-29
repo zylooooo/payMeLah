@@ -5,8 +5,6 @@ from datetime import datetime, timezone, timedelta
 from infrastructure import Base
 
 
-# Singapore Time (SGT) is UTC+8
-SGT = timezone(timedelta(hours=8))
 
 class Payment(Base):
     """
@@ -22,8 +20,8 @@ class Payment(Base):
     amount = Column(Numeric(12, 2), nullable=False, comment='Amount of the payment')
     currency = Column(String(3), nullable=False, comment='Currency of the payment')
     description = Column(String(500), nullable=True, comment='Optional description of the payment')
-    payment_date = Column(Date, nullable=False, default=lambda: datetime.now(SGT).date(), comment='Date of the payment')
-    created_at = Column(DateTime, default=lambda: datetime.now(SGT), nullable=False, comment='Payment creation timestamp')
+    payment_date = Column(Date, nullable=False, default=lambda: datetime.now(timezone.utc).date(), comment='Date of the payment')
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Payment creation timestamp')
     expense_ids = Column(JSONB, nullable=True, comment='Array of expense IDs this payment settles')  # Array of expense IDs this payment settles
 
     # Relationships

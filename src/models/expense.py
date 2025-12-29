@@ -13,8 +13,6 @@ class ExpenseSplitType(str, enum.Enum):
     CUSTOM = 'custom'
 
 
-# Singapore Time (SGT) is UTC+8
-SGT = timezone(timedelta(hours=8))
 
 class Expense(Base):
     """
@@ -30,13 +28,13 @@ class Expense(Base):
     amount = Column(Numeric(12, 2), nullable=False, comment='Amount of the expense in the currency of this specific expense')
     currency = Column(String(3), nullable=False, comment='Currency of the expense')
     payer_id = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='ID of the user who paid for the expense')
-    expense_date = Column(Date, nullable=False, default=lambda: datetime.now(SGT).date(), comment='Date that the expense was incurred')
+    expense_date = Column(Date, nullable=False, default=lambda: datetime.now(timezone.utc).date(), comment='Date that the expense was incurred')
     # TODO: consider adding a category enum here, revisit later on after base functionality is implemented
     category = Column(String(100), nullable=True, comment='Optional category of the expense')
     split_type = Column(Enum(ExpenseSplitType, native_enum=False, length=20), nullable=False, default=ExpenseSplitType.EQUAL, comment='Type of split for the expense')
     created_by = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='ID of the user who created the expense')
-    created_at = Column(DateTime, default=lambda: datetime.now(SGT), nullable=False, comment='Expense creation timestamp')
-    updated_at = Column(DateTime, default=lambda: datetime.now(SGT), onupdate=lambda: datetime.now(SGT), nullable=False, comment='Expense last update timestamp')
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Expense creation timestamp')
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='Expense last update timestamp')
     is_settled = Column(Boolean, default=False, nullable=False, comment='Whether the expense has been settled')
 
     # Relationships
@@ -77,7 +75,7 @@ class ExpenseParticipant(Base):
     # If split_type is percentage, this will be used to store the percentage of the split
     split_percentage = Column(Numeric(5, 2), nullable=True, comment='Percentage of the expense the participant owes or has paid')
     is_settled = Column(Boolean, default=False, nullable=False, comment='Whether the participant has paid their share')
-    settled_at = Column(DateTime, nullable=True, comment='Timestamp when the participant paid their share')
+    settled_at = Column(DateTime(timezone=True), nullable=True, comment='Timestamp when the participant paid their share')
 
     # Relationships
     expense = relationship('Expense', back_populates='participants')

@@ -14,8 +14,6 @@ class GroupMemberRole(str, enum.Enum):
     OWNER = 'owner'
 
 
-# Singapore Time (SGT) is UTC+8
-SGT = timezone(timedelta(hours=8))
 
 
 class Group(Base):
@@ -30,8 +28,8 @@ class Group(Base):
     description = Column(Text, nullable=True, comment='Additional description of the group')
     default_currency = Column(String(3), nullable=False, default='SGD', comment='Default currency for the group\'s expenses')
     created_by = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='User who created the group')
-    created_at = Column(DateTime, default=lambda: datetime.now(SGT), nullable=False, comment='Group creation timestamp')
-    updated_at = Column(DateTime, default=lambda: datetime.now(SGT), onupdate=lambda: datetime.now(SGT), nullable=False, comment='Group last update timestamp')
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Group creation timestamp')
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='Group last update timestamp')
 
     # Relationships
     members = relationship('GroupMember', back_populates='group', cascade='all, delete-orphan')
@@ -59,7 +57,7 @@ class GroupMember(Base):
     group_id = Column(Integer, ForeignKey('groups.id', ondelete='CASCADE'), nullable=False, comment='ID of the group the member belongs to')
     user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, comment='ID of the user who is a member of the group')
     role = Column(Enum(GroupMemberRole, native_enum=False, length=20), nullable=False, default=GroupMemberRole.MEMBER, comment='Role of the user in the group')
-    joined_at = Column(DateTime, default=lambda: datetime.now(SGT), nullable=False, comment='Timestamp when the user joined the group')
+    joined_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Timestamp when the user joined the group')
 
     # Relationships
     group = relationship('Group', back_populates='members')

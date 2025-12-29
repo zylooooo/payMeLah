@@ -3,8 +3,6 @@ from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, timedelta
 from infrastructure import Base
 
-# Singapore Time (SGT) is UTC+8
-SGT = timezone(timedelta(hours=8))
 
 class User(Base):
     """
@@ -19,8 +17,8 @@ class User(Base):
     first_name = Column(String(255), nullable=True, comment='User\'s first name')
     last_name = Column(String(255), nullable=True, comment='User\'s last name')
     preferred_currency = Column(String(3), nullable=False, default='SGD', comment='User\'s preferred currency')
-    created_at = Column(DateTime, default=lambda: datetime.now(SGT), nullable=False, comment='User\'s creation timestamp')
-    updated_at = Column(DateTime, default=lambda: datetime.now(SGT), onupdate=lambda: datetime.now(SGT), nullable=False, comment='User\'s last update timestamp')
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='User\'s creation timestamp')
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='User\'s last update timestamp')
 
     # Relationships
     groups = relationship('GroupMember', back_populates='user', cascade='all, delete-orphan')

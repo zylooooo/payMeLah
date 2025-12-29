@@ -22,3 +22,5 @@ if not DB_URL:
 
 # Alembic automigration, default is False. If true, Alembic migrations will be run automatically when the bot starts.
 AUTO_MIGRATE = os.getenv('AUTO_MIGRATE').lower() == 'true'
+
+ENV = os.getenv('ENV')

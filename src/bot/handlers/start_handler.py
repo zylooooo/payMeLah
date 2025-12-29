@@ -1,6 +1,8 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import BOT_NAME
+from services import UserService
+from infrastructure import get_db
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,22 +20,36 @@ ERROR_MSG: str = (
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the /start command"""
-    user = update.effective_user
+    """
+    Handle the /start command. Auto creates a new user if the user does not alredy exists.
+    Sends a self-introduction message to the user to explain the bot's purpose.
+    """
+    telegram_user = update.effective_user
     
-    if not user:
+    if not telegram_user:
         logger.warning("Received /start command without user information")
         return
     
-    logger.info(f"Start command from user: {user.id} (@{user.username})")
+    logger.info(f"Start command from user: {telegram_user.id} (@{telegram_user.username})")
     
     try:
+        async with get_db() as db:
+            # Check if the user already exists
+            user = await UserService.get_user_by_id(db, telegram_user.id)
+            
+            if not user:
+                # Create the new user if user does not already exists
+                user = await UserService.create_user(
+                    db,
+                    telegram_user.id,
+                    telegram_user.username,
+                    telegram_user.first_name,
+                    telegram_user.last_name
+                )
+        
+        # Send the welcome message
         await update.message.reply_text(NEW_USER_WELCOME_MSG, parse_mode="HTML")
-        logger.debug(f"Successfully sent welcome message to user {user.id}")
     except Exception as e:
-        logger.error(f"Error handling start command for user {user.id}: {e}", exc_info=True)
-        try:
-            await update.message.reply_text(ERROR_MSG)
-        except Exception as send_error:
-            logger.error(f"Could not send error message to user: {send_error}")
+        logger.error(f"Error handling start command for user {telegram_user.id}: {e}", exc_info=True)
+        await update.message.reply_text(ERROR_MSG)
     

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bot.bot import Bot
 from shared.logger import setup_logging
-from config import AUTO_MIGRATE
+from config import AUTO_MIGRATE, ENV
 
 from models import ( # noqa: E402, F401
     User,
@@ -53,7 +53,11 @@ def run_alembic_migrations():
     except subprocess.CalledProcessError as e:
         logger.error(f"Migration failed: {e.stderr}")
         logger.error(f"Migration output: {e.stdout}")
-        raise
+        logger.warning("Bot will continue starting, but database may be out of sync.")
+        # We don't raise here in development to allow the container to stay alive
+        # In production, you might want to raise to prevent the bot from running with old schema
+        if ENV == 'production':
+            raise
     except FileNotFoundError:
         logger.warning("Alembic not found. Ensure migrations are run manually.")
         logger.warning("Run: alembic upgrade head")

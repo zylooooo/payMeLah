@@ -16,7 +16,7 @@ services:
     networks:
       - paymelah-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,7 +30,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./src:/app:ro
+      - ./src:/app:rw
       - ./src/logs:/app/logs
     networks:
       - paymelah-network
