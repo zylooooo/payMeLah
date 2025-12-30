@@ -14,6 +14,7 @@ from utils import validate_name, validate_currency_code
 from shared import UserNotFoundException
 from services import UserService
 from infrastructure import get_db
+from bot.utils import validate_chat_type
 import logging
 
 logger = logging.getLogger(__name__)
@@ -244,6 +245,7 @@ async def _navigate_to_prev(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 # Conversation Handlers
 # ============================================================================
 
+@validate_chat_type("private")
 async def start_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the update profile conversation."""
     telegram_user = update.effective_user

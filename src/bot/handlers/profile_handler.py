@@ -2,10 +2,12 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from infrastructure import get_db
 from services import UserService
+from bot.utils import validate_chat_type
 import logging
 
 logger = logging.getLogger(__name__)
 
+@validate_chat_type("private")
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/profile command handler to show the user's profile information."""
     telegram_user = update.effective_user

@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes
 from config import BOT_NAME
 from services import UserService
 from infrastructure import get_db
+from bot.utils import validate_chat_type
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ ERROR_MSG: str = (
 )
 
 
+@validate_chat_type("private", "group")
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle the /start command. Auto creates a new user if the user does not alredy exists.
