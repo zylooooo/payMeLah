@@ -24,8 +24,8 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text(response_msg, parse_mode="HTML")
     except Exception as e:
-        logger.error(f"An unexpected error occured while handling profile command for user {telegram_user.id}: {e}", exc_info=True)
-        await update.message.reply_text("An unexpected error occured while getting your profile information. Please try again later.")
+        logger.error(f"An unexpected error occurred while handling profile command for user {telegram_user.id}: {e}", exc_info=True)
+        await update.message.reply_text("An unexpected error occurred while getting your profile information. Please try again later.")
 
 # Helper function to format the profile information
 def format_profile_information(user: dict) -> str:

@@ -21,6 +21,6 @@ if not DB_URL:
     raise ValueError("Database connection URL is not set. Check your environment variables.")
 
 # Alembic automigration, default is False. If true, Alembic migrations will be run automatically when the bot starts.
-AUTO_MIGRATE = os.getenv('AUTO_MIGRATE').lower() == 'true'
+AUTO_MIGRATE = os.getenv('AUTO_MIGRATE', 'false').lower() == 'true'
 
 ENV = os.getenv('ENV')

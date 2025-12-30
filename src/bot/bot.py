@@ -3,6 +3,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from config import BOT_API_TOKEN
 from bot.config import setup_commands
 from bot.handlers import start_command, profile_command
+from bot.conversations import create_update_conversation_handler
 from infrastructure import close_db
 import logging
 
@@ -32,6 +33,7 @@ class Bot:
     def setup_handlers(self):
         logger.info("Setting up handlers...")
         # Add conversation handlers first
+        self.app.add_handler(create_update_conversation_handler())
         # Add command handlers
         self.app.add_handler(CommandHandler("start", start_command))
         self.app.add_handler(CommandHandler("profile", profile_command))

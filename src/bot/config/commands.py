@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 PRIVATE_COMMANDS = [
     BotCommand(command="start", description="Start using PayMeLah"),
-    BotCommand(command="profile", description="View your profile information")
+    BotCommand(command="profile", description="View your profile information"),
+    BotCommand(command="update", description="Update your profile information")
 ]
 
 async def setup_commands(bot: Bot) -> None:
