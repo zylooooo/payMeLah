@@ -1,7 +1,8 @@
 from telegram import (
     BotCommand,
     Bot,
-    BotCommandScopeAllPrivateChats
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeAllGroupChats
 )
 import logging
 
@@ -13,6 +14,10 @@ PRIVATE_COMMANDS = [
     BotCommand(command="update", description="Update your profile information")
 ]
 
+GROUP_COMMANDS = [
+    BotCommand(command="newgroup", description="Create a new expense group")
+]
+
 async def setup_commands(bot: Bot) -> None:
     """Setup the commands for the bot"""
     try:
@@ -22,6 +27,12 @@ async def setup_commands(bot: Bot) -> None:
         await bot.set_my_commands(
             PRIVATE_COMMANDS,
             scope=BotCommandScopeAllPrivateChats()
+        )
+        
+        # Set up commands for group chats
+        await bot.set_my_commands(
+            GROUP_COMMANDS,
+            scope=BotCommandScopeAllGroupChats()
         )
     
         logger.info("Bot commands setup successfully")

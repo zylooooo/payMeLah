@@ -3,9 +3,17 @@ from shared.exceptions.user_service_exceptions import (
     UserNotFoundException,
     UserAlreadyExistsException
 )
+from shared.exceptions.group_exceptions import (
+    GroupNotFoundException,
+    GroupMemberAlreadyExistsException,
+    UnauthorizedGroupJoinException
+)
 
 __all__ = [
     "setup_logging",
     "UserNotFoundException",
-    "UserAlreadyExistsException"
+    "UserAlreadyExistsException",
+    "GroupNotFoundException",
+    "GroupMemberAlreadyExistsException",
+    "UnauthorizedGroupJoinException"
 ]

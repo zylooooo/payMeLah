@@ -4,6 +4,7 @@ from config import BOT_NAME
 from services import UserService
 from infrastructure import get_db
 from bot.utils import validate_chat_type
+from bot.handlers.join_handler import handle_join_group
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,8 +24,10 @@ ERROR_MSG: str = (
 @validate_chat_type("private", "group")
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Handle the /start command. Auto creates a new user if the user does not alredy exists.
-    Sends a self-introduction message to the user to explain the bot's purpose.
+    Handle the /start command with optional deeplink parameters.
+    - Auto creates a new user if the user does not already exist.
+    - Routes to join handler if deeplink parameter is join_group_{id}.
+    - Sends a self-introduction message for regular start commands.
     """
     telegram_user = update.effective_user
     
@@ -35,12 +38,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.info(f"Start command from user: {telegram_user.id} (@{telegram_user.username})")
     
     try:
+        # Handle deeplink parameters first
+        if context.args and len(context.args) > 0:
+            start_param = context.args[0]
+            
+            # Handle join_group deeplink: /start join_group_{group_id}
+            if start_param.startswith('join_group_'):
+                group_id_str = start_param.replace('join_group_', '', 1)
+                try:
+                    group_id = int(group_id_str)
+                    # Route to join handler (it will handle user creation if needed)
+                    await handle_join_group(update, context, group_id)
+                    return
+                except ValueError:
+                    logger.warning(f"Invalid group ID in deeplink: {group_id_str}")
+                    await update.message.reply_text(
+                        "Invalid group link. Please reach out to the creator of this group.",
+                        parse_mode="HTML"
+                    )
+                    return
+        
+        # Regular /start command - create user if needed and show welcome
         async with get_db() as db:
             # Check if the user already exists
             user = await UserService.get_user_by_id(db, telegram_user.id)
             
             if not user:
-                # Create the new user if user does not already exists
+                # Create the new user if user does not already exist
                 user = await UserService.create_user(
                     db,
                     telegram_user.id,

@@ -14,8 +14,6 @@ class GroupMemberRole(str, enum.Enum):
     OWNER = 'owner'
 
 
-
-
 class Group(Base):
     """
     Group model representing an expense group, a group of users.
@@ -27,6 +25,7 @@ class Group(Base):
     name = Column(String(255), nullable=False, comment='Group name chosen by the user')
     description = Column(Text, nullable=True, comment='Additional description of the group')
     default_currency = Column(String(3), nullable=False, default='SGD', comment='Default currency for the group\'s expenses')
+    telegram_chat_id = Column(BigInteger, nullable=False, comment='Telegram chat ID of the group chat where this expense group is created')
     created_by = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='User who created the group')
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Group creation timestamp')
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='Group last update timestamp')
@@ -42,6 +41,7 @@ class Group(Base):
             'name': self.name,
             'description': self.description,
             'default_currency': self.default_currency,
+            'telegram_chat_id': self.telegram_chat_id,
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
