@@ -6,7 +6,9 @@ from shared.exceptions.user_service_exceptions import (
 from shared.exceptions.group_exceptions import (
     GroupNotFoundException,
     GroupMemberAlreadyExistsException,
-    UnauthorizedGroupJoinException
+    GroupMemberNotFoundException,
+    UnauthorizedGroupJoinException,
+    UnauthorizedActionException
 )
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     "UserAlreadyExistsException",
     "GroupNotFoundException",
     "GroupMemberAlreadyExistsException",
-    "UnauthorizedGroupJoinException"
+    "GroupMemberNotFoundException",
+    "UnauthorizedGroupJoinException",
+    "UnauthorizedActionException"
 ]

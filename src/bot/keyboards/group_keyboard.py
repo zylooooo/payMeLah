@@ -10,17 +10,14 @@ class GroupKeyboard:
     PREFIX = "group_"
 
     # Actions
-    ACTION_CREATE = "create"
     ACTION_SELECT = "select"
     ACTION_CANCEL = "cancel"
     ACTION_CONFIRM = "confirm"
-    ACTION_EDIT = "edit"
     ACTION_DELETE = "delete"
-    ACTION_ADD_MEMBER = "add_member"
     ACTION_REMOVE_MEMBER = "remove_member"
     ACTION_LEAVE = "leave"
-    ACTION_CHANGE_ROLE = "change_role"
     ACTION_BACK = "back"
+    ACTION_BACK_TO_LIST = "back_list"
     ACTION_NEXT = "next"
     ACTION_PREV = "prev"
     ACTION_SKIP = "skip"
@@ -77,26 +74,18 @@ class GroupKeyboard:
             )
         ])
 
-        # Owner and admin actions
+        # Owner and admin actions - Remove Member
         if user_role in [GroupMemberRole.OWNER, GroupMemberRole.ADMIN]:
             buttons.append([
-                InlineKeyboardButton(
-                    "Add Member",
-                    callback_data=cls._build_callback_data(cls.ACTION_ADD_MEMBER, str(group_id))
-                ),
                 InlineKeyboardButton(
                     "Remove Member",
                     callback_data=cls._build_callback_data(cls.ACTION_REMOVE_MEMBER, str(group_id))
                 )
             ])
         
-        # Owner only actions
+        # Owner only actions - Delete Group
         if user_role == GroupMemberRole.OWNER:
             buttons.append([
-                InlineKeyboardButton(
-                    "Edit Group",
-                    callback_data=cls._build_callback_data(cls.ACTION_EDIT, str(group_id))
-                ),
                 InlineKeyboardButton(
                     "Delete Group",
                     callback_data=cls._build_callback_data(cls.ACTION_DELETE, str(group_id))
@@ -112,8 +101,9 @@ class GroupKeyboard:
                 )
             ])
         
-        # Cancel button
+        # Back and Cancel buttons
         buttons.append([
+            InlineKeyboardButton("<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST)),
             InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
         ])
     
@@ -134,34 +124,7 @@ class GroupKeyboard:
                 )
             ]
         ])
-    
-    @classmethod
-    def get_role_selection_keyboard(cls, group_id: int, user_id: int) -> InlineKeyboardMarkup:
-        """Generate keyboard for selecting member role."""
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "Member",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_CHANGE_ROLE,
-                        f"{group_id}:{user_id}:{GroupMemberRole.MEMBER.value}"
-                    )
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Admin",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_CHANGE_ROLE,
-                        f"{group_id}:{user_id}:{GroupMemberRole.ADMIN.value}"
-                    )
-                )
-            ],
-            [
-                InlineKeyboardButton("Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
-            ]
-        ])
-    
+
     @classmethod
     def get_join_group_keyboard(cls, group_id: int) -> InlineKeyboardMarkup:
         """Generate keyboard for joining a group via deeplink."""
@@ -242,3 +205,100 @@ class GroupKeyboard:
     def matches_prefix(cls, callback_data: str) -> bool:
         """Check if callback data matches this keyboard's prefix."""
         return callback_data and callback_data.startswith(cls.PREFIX)
+
+    @classmethod
+    def get_members_list_keyboard(cls, group_id: int) -> InlineKeyboardMarkup:
+        """Generate keyboard for members list view."""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "<< Back to Group",
+                    callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group_id))
+                )
+            ],
+            [
+                InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
+            ]
+        ])
+
+    @classmethod
+    def get_delete_confirmation_keyboard(cls, group_id: int) -> InlineKeyboardMarkup:
+        """Generate confirmation keyboard for deleting a group."""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "Yes, Delete",
+                    callback_data=cls._build_callback_data(cls.ACTION_CONFIRM, f"delete:{group_id}")
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "<< Back",
+                    callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group_id))
+                )
+            ]
+        ])
+
+    @classmethod
+    def get_leave_confirmation_keyboard(cls, group_id: int) -> InlineKeyboardMarkup:
+        """Generate confirmation keyboard for leaving a group."""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "Yes, Leave",
+                    callback_data=cls._build_callback_data(cls.ACTION_CONFIRM, f"leave:{group_id}")
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "<< Back",
+                    callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group_id))
+                )
+            ]
+        ])
+
+    @classmethod
+    def get_remove_member_keyboard(cls, group_id: int, members: List[dict], requesting_user_role: GroupMemberRole) -> InlineKeyboardMarkup:
+        """
+        Generate keyboard for selecting a member to remove.
+        Shows removable members based on requester's role.
+        """
+        buttons = []
+        
+        # Sort by role (owner first, then admin, then member)
+        role_order = {'owner': 0, 'admin': 1, 'member': 2}
+        sorted_members = sorted(members, key=lambda m: role_order.get(m.get('role', 'member'), 2))
+        
+        for member in sorted_members:
+            member_role = member.get('role', 'member')
+            user_id = member.get('user_id')
+            
+            # Skip owner (cannot be removed)
+            if member_role == 'owner':
+                continue
+            
+            # Admins can only remove members, not other admins
+            if requesting_user_role == GroupMemberRole.ADMIN and member_role == 'admin':
+                continue
+            
+            # Get display name with role indicator
+            display_name = member.get('first_name') or member.get('username') or f"User {user_id}"
+            role_label = f"[{member_role.title()}]" if member_role == 'admin' else ""
+            button_text = f"{display_name} {role_label}".strip()
+            
+            buttons.append([
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=cls._build_callback_data(cls.ACTION_CONFIRM, f"remove:{group_id}:{user_id}")
+                )
+            ])
+        
+        # Back button
+        buttons.append([
+            InlineKeyboardButton(
+                "<< Back",
+                callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group_id))
+            )
+        ])
+        
+        return InlineKeyboardMarkup(buttons)

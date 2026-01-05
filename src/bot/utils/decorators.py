@@ -34,15 +34,15 @@ def validate_chat_type(*allowed_chat_types: str):
                     # Redirect user to private chat if they attempt to access a private command in a group chat
                     if chat_type in ["group", "supergroup"] and "private" in allowed_chat_types:
                         await update.message.reply_text(
-                            f"<b>⚠️ The {command} command is not available in group chats!</b>\n\n"
+                            f"<b>The {command} command is not available in group chats!</b>\n\n"
                             "Click the button below to access the command in a private chat!",
                             reply_markup=ChatRedirectKeyboard.get_keyboard(),
                             parse_mode="HTML"
                         )
                     else:
                         await update.message.reply_text(
-                            f"⚠️ This command is not available in {chat_type} chats!\n"
-                            f"Please use this command in these {', '.join(allowed_chat_types)} chats where I am added to!"
+                            f"This command is not available in {chat_type} chats!\n"
+                            f"Please use this command in {', '.join(allowed_chat_types)} chats where I am added to!"
                         )
                 return
             

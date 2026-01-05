@@ -13,7 +13,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_user = update.effective_user
     response_msg: str = ""
     if not telegram_user:
-        logger.warning("Recieved /profile command without telegram user information")
+        logger.warning("Received /profile command without telegram user information")
         return
     
     logger.info(f"Show profile information for user: {telegram_user.id} (@{telegram_user.username})")

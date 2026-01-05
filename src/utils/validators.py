@@ -1,10 +1,12 @@
 import pycountry
 import logging
-from typing import Optional, Tuple
+from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+# Constants
 MAX_NAME_LENGTH = 64
+MAX_GROUP_NAME_LENGTH = 255
 CURRENCY_CODE_LENGTH = 3
 
 
@@ -25,10 +27,9 @@ def validate_name(name: str) -> Tuple[bool, Optional[str]]:
 
     if len(name) > MAX_NAME_LENGTH:
         return False, f"Name is too long. Maximum length is {MAX_NAME_LENGTH} characters."
-    elif len(name) < 1:
-        return False, "Name cannot be empty. Please enter a valid name or use 'Skip'."
     
     return True, None
+
 
 def validate_currency_code(currency_code: str) -> Tuple[bool, Optional[str]]:
     """
@@ -59,3 +60,25 @@ def validate_currency_code(currency_code: str) -> Tuple[bool, Optional[str]]:
     except Exception as e:
         logger.error(f"An unexpected error occurred while validating currency code {currency_code}: {e}", exc_info=True)
         return False, f"An unexpected error occurred while validating currency code {currency_code}. Please try again."
+
+
+def validate_group_name(name: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate if the user's input group name is valid.
+
+    Args:
+        name: str - The group name to validate
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not name or not name.strip():
+        return False, "Group name cannot be empty. Please enter a valid group name between 1 and 255 characters."
+    
+    name = name.strip()
+
+    if len(name) > MAX_GROUP_NAME_LENGTH:
+        return False, f"Group name must be between 1 and {MAX_GROUP_NAME_LENGTH} characters. Please enter a valid group name."
+    
+    return True, None
+

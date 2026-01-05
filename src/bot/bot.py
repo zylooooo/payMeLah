@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from config import BOT_API_TOKEN
 from bot.config import setup_commands
-from bot.handlers import start_command, profile_command
+from bot.handlers import start_command, profile_command, groups_command, create_group_callback_handler
 from bot.conversations import (
     create_update_conversation_handler,
     create_group_conversation_handler
@@ -38,9 +38,15 @@ class Bot:
         # Add conversation handlers first (order matters - they should be before command handlers)
         self.app.add_handler(create_update_conversation_handler())
         self.app.add_handler(create_group_conversation_handler())
+
         # Add command handlers
         self.app.add_handler(CommandHandler("start", start_command))
         self.app.add_handler(CommandHandler("profile", profile_command))
+        self.app.add_handler(CommandHandler('groups', groups_command))
+
+        # Add callback query handler
+        self.app.add_handler(create_group_callback_handler())
+
         # Add error handler
         self.app.add_error_handler(self.error_handler)
         
