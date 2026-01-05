@@ -463,4 +463,28 @@ class GroupService:
             logger.error(f"Error removing member from group {group_id}: {e}", exc_info=True)
             await db.rollback()
             raise
-            
+    
+    @staticmethod
+    async def get_group_by_chat_id(db: AsyncSession, chat_id: int) -> List[dict]:
+        """
+        Get a group by Telegram chat ID.
+
+        Args:
+            db - AsyncSession - The database session.
+            chat_id: int - The Telegram chat ID of the group.
+        
+        Returns:
+            List[dict] - A list of group data that is associated with the Telegram chat ID, empty if nothing is found.
+        """
+        logger.info(f"Getting group from Telegram chat ID: {chat_id}")
+        result = await db.execute(
+            select(Group)
+            .where(Group.telegram_chat_id == chat_id)
+            .order_by(Group.created_at.desc())
+        )
+        groups = result.scalars().all()
+
+        groups_list = [group.to_dict() for group in groups]
+        logger.info(f"Found {len(groups_list)} groups from Telegram chat ID: {chat_id}")
+        return groups_list
+          

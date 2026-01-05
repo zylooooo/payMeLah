@@ -12,11 +12,12 @@ PRIVATE_COMMANDS = [
     BotCommand(command="start", description="Start using PayMeLah"),
     BotCommand(command="profile", description="View your profile information"),
     BotCommand(command="update", description="Update your profile information"),
-    BotCommand(command="groups", description="View all of your expense groups")
+    BotCommand(command="groups", description="View and manage all of your expense groups")
 ]
 
 GROUP_COMMANDS = [
-    BotCommand(command="newgroup", description="Create a new expense group")
+    BotCommand(command="newgroup", description="Create a new expense group"),
+    BotCommand(command="groups", description="View and manage all of the expense groups in this chat")
 ]
 
 async def setup_commands(bot: Bot) -> None:

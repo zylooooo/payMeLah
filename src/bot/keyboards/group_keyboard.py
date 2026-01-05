@@ -138,6 +138,26 @@ class GroupKeyboard:
         ])
 
     @classmethod
+    def get_group_info_keyboard(cls, group_id: int, is_member: bool) -> InlineKeyboardMarkup:
+        """Generate keyboard for group info view (used in group chat context)."""
+        buttons = []
+        
+        if not is_member:
+            buttons.append([
+                InlineKeyboardButton(
+                    "Join Group",
+                    url=f"https://t.me/{BOT_NAME}?start=join_group_{group_id}"
+                )
+            ])
+        
+        # Back button
+        buttons.append([
+            InlineKeyboardButton("<< Back to List", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST))
+        ])
+        
+        return InlineKeyboardMarkup(buttons)
+
+    @classmethod
     def get_navigation_keyboard(
         cls,
         current_field: str,

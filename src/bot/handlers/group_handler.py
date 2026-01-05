@@ -18,46 +18,107 @@ logger = logging.getLogger(__name__)
 
 ERROR_MSG: str = "An unexpected error has occurred. Please try again later."
 
-@validate_chat_type("private")
+@validate_chat_type("private", "group", "supergroup")
 async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/groups command handler to show the groups a user is a member of."""
-    telegram_user = update.effective_user
-    if not telegram_user:
-        logger.warning("Received /groups command without telegram user information")
-        return
-    
-    try:
-        async with get_db() as db:
-            groups = await GroupService.get_all_groups_by_user_id(db, telegram_user.id)
-            # Case where user is not a member of any groups
-            if not groups or len(groups) == 0:
-                await update.message.reply_text(
-                    "You are not a member of any groups yet.\n"
-                    "You can create a new group by adding me into a new group chat and invite other members to join the group.\n"
+    """
+    /groups command handler.
+    - If the command is used in a private chat, it will show all the groups that the user is a member of.
+    - If the command is used in a group chat, it will show all the groups that is associated with the group chat.
+    """
+    chat_type = update.effective_chat.type
+
+    if chat_type == "private":
+        logger.info("Showing list of groups that user is a member of in a private chat.")
+        telegram_user = update.effective_user
+        if not telegram_user:
+            logger.warning("Received /groups command without telegram user information")
+            return
+        
+        try:
+            async with get_db() as db:
+                groups = await GroupService.get_all_groups_by_user_id(db, telegram_user.id)
+                # Case where user is not a member of any groups
+                if not groups or len(groups) == 0:
+                    await update.message.reply_text(
+                        "You are not a member of any groups yet.\n"
+                        "You can create a new group by adding me into a new group chat and invite other members to join the group.\n"
+                    )
+                    return
+                
+            # Store groups in user context for pagination
+            context.user_data['user_groups'] = groups
+            context.user_data['groups_page'] = 0
+
+            message = _format_groups_list_message(groups, page=0)
+            keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=0)
+
+            await update.message.reply_text(
+                message,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            logger.error(
+                f"An unexpected error occurred while listing groups for user {telegram_user.id}: {e}",
+                exc_info = True
+            )
+            await update.message.reply_text(ERROR_MSG)
+    elif chat_type in ["group", "supergroup"]:
+        telegram_chat_id = update.effective_chat.id
+
+        if not telegram_chat_id:
+            logger.warning("Received /groups command without telegram chat ID")
+            return
+        
+        logger.info(f"Showing expense groups for Telegram chat ID: {telegram_chat_id}")
+        
+        try:
+            async with get_db() as db:
+                groups = await GroupService.get_group_by_chat_id(db, telegram_chat_id)
+
+                if not groups or len(groups) == 0:
+                    await update.message.reply_text(
+                        "There are no groups associated with this group chat yet.\n"
+                        "Anyone can create a new group by using the /newgroup command.\n\n"
+                        "<i>Do ensure that all intended members are added to this group chat first before creating a new expense group.</i>",
+                        parse_mode="HTML"
+                    )
+                    return
+                
+                # Store in chat_data for pagination
+                context.chat_data['chat_groups'] = groups
+                context.chat_data['chat_groups_page'] = 0
+                
+                message = _format_groups_list_message(
+                    groups,
+                    page=0,
+                    header="Expense Groups in this Chat",
+                    footer="Select a group to view details and join."
                 )
-                return
-            
-        # Store groups in user context for pagination
-        context.user_data['user_groups'] = groups
-        context.user_data['groups_page'] = 0
-
-        message = _format_groups_list_message(groups, page=0)
-        keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=0)
-
-        await update.message.reply_text(
-            message,
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        logger.error(
-            f"An unexpected error occurred while listing groups for user {telegram_user.id}: {e}",
-            exc_info = True
-        )
-        await update.message.reply_text(ERROR_MSG)
+                keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=0)
+                
+                await update.message.reply_text(
+                    message,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+        except Exception as e:
+            logger.error(
+                f"An unexpected error occurred while listing groups for chat {telegram_chat_id}: {e}",
+                exc_info=True
+            )
+            await update.message.reply_text(ERROR_MSG)
+                
 
 
-def _format_groups_list_message(groups: List[int], page: int = 0, per_page: int = 5) -> str:
+
+def _format_groups_list_message(
+    groups: List[dict],
+    page: int = 0,
+    per_page: int = 5,
+    header: str = "Your Groups",
+    footer: str = None
+) -> str:
     """Helper function to format the groups list message for pagination."""
     start_index = page * per_page
     end_index = start_index + per_page
@@ -65,25 +126,26 @@ def _format_groups_list_message(groups: List[int], page: int = 0, per_page: int 
     total_groups = len(groups)
 
     if total_groups == 0:
-        return "You are not a member of any groups yet."
+        return "No groups found."
     
-    message = f"<b>Your Groups: {total_groups}</b>\n\n"
+    message = f"<b>{header}: {total_groups}</b>\n\n"
 
     for idx, group in enumerate(page_groups, start=start_index + 1):
-        description = group.get("description", "No description")
-        if description:
-            description = description[:50] + "..." if len(description) > 50 else description
-        else:
-            description = "No description"
+        description = group.get("description") or "No description"
+        if len(description) > 50:
+            description = description[:50] + "..."
         
         message += (
             f"<b>{idx}. {group['name']}</b>\n"
-            f"  {description}\n"
-            f"  Currency: {group['default_currency']}\n\n"
+            f"   {description}\n"
+            f"   Currency: {group['default_currency']}\n\n"
         )
     
     if total_groups > per_page:
-        message += f"<i>Page {page + 1} of {(total_groups + per_page - 1) // per_page}</i>"
+        message += f"<i>Page {page + 1} of {(total_groups + per_page - 1) // per_page}</i>\n"
+    
+    if footer:
+        message += f"\n<i>{footer}</i>"
     
     return message
 
@@ -97,6 +159,10 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
         logger.warning("Received group callback query without telegram user information")
         return
     
+    # Determine chat context
+    chat_type = update.effective_chat.type if update.effective_chat else "private"
+    is_group_chat = chat_type in ["group", "supergroup"]
+    
     action, data = GroupKeyboard.extract_callback_info(query.data)
 
     if action == GroupKeyboard.ACTION_CANCEL:
@@ -105,7 +171,7 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Back to groups list
     if action == GroupKeyboard.ACTION_BACK_TO_LIST:
-        await _handle_back_to_list(query, context, telegram_user.id)
+        await _handle_back_to_list(query, context, telegram_user.id, is_group_chat)
         return
     
     if action == GroupKeyboard.ACTION_SELECT:
@@ -116,7 +182,7 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
         try:
             group_id = int(data)
-            await _show_group_details(query, context, group_id, telegram_user.id)
+            await _show_group_details(query, context, group_id, telegram_user.id, is_group_chat)
         except ValueError:
             await query.edit_message_text("Invalid Group ID.")
         except Exception as e:
@@ -128,13 +194,29 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # Handle pagination
         try:
             page = int(data) if data else 0
-            groups = context.user_data.get('user_groups', [])
-
-            if not groups:
-                await query.edit_message_text("Groups list expired. Please use /groups again to see the list that you are a member of.")
-                return
             
-            message = _format_groups_list_message(groups, page=page)
+            if is_group_chat:
+                groups = context.chat_data.get('chat_groups', [])
+                if not groups:
+                    await query.edit_message_text("Groups list expired. Please use /groups again.")
+                    return
+                
+                message = _format_groups_list_message(
+                    groups,
+                    page=page,
+                    header="Expense Groups in this Chat",
+                    footer="Select a group to view details and join."
+                )
+                context.chat_data['chat_groups_page'] = page
+            else:
+                groups = context.user_data.get('user_groups', [])
+                if not groups:
+                    await query.edit_message_text("Groups list expired. Please use /groups again.")
+                    return
+                
+                message = _format_groups_list_message(groups, page=page)
+                context.user_data['groups_page'] = page
+            
             keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
 
             await query.edit_message_text(
@@ -142,7 +224,6 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
-            context.user_data['groups_page'] = page
         except Exception as e:
             logger.error(f"Error handling pagination: {e}", exc_info=True)
             await query.edit_message_text(ERROR_MSG)
@@ -205,8 +286,23 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await _handle_confirmation(query, context, data, telegram_user.id)
         return
 
-async def _show_group_details(query, context: ContextTypes.DEFAULT_TYPE, group_id: int, user_id: int) -> None:
-    """Show detailed information about a selected group."""
+async def _show_group_details(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    group_id: int,
+    user_id: int,
+    is_group_chat: bool = False
+) -> None:
+    """
+    Show detailed information about a selected group.
+    
+    Args:
+        query: The callback query
+        context: Bot context
+        group_id: The group ID to show details for
+        user_id: The requesting user's ID
+        is_group_chat: If True, shows join option instead of management actions
+    """
     try:
         async with get_db() as db:
             group = await GroupService.get_group_by_id(db, group_id)
@@ -220,23 +316,28 @@ async def _show_group_details(query, context: ContextTypes.DEFAULT_TYPE, group_i
             
             # Check if user is a member
             is_member = await GroupService.is_member(db, group_id, user_id)
-            if not is_member:
-                await query.edit_message_text(
-                    "<b>Access denied.</b>\n\n"
-                    "You are not a member of this group.",
-                    parse_mode="HTML"
-                )
-                return
-            
-            # Get user's role in the group
-            member_role = await GroupService.get_member_role(db, group_id, user_id)
             
             # Get group members count
             members = await GroupService.get_group_members(db, group_id)
             
-            # Format group details message
-            message = _format_group_details(group, members, member_role)
-            keyboard = GroupKeyboard.get_group_actions_keyboard(group_id, member_role)
+            if is_group_chat:
+                # Group chat context: show info with join option
+                message = _format_group_details(group, members, is_member=is_member)
+                keyboard = GroupKeyboard.get_group_info_keyboard(group_id, is_member)
+            else:
+                # Private chat context: require membership for management
+                if not is_member:
+                    await query.edit_message_text(
+                        "<b>Access denied.</b>\n\n"
+                        "You are not a member of this group.",
+                        parse_mode="HTML"
+                    )
+                    return
+                
+                # Get user's role in the group
+                member_role = await GroupService.get_member_role(db, group_id, user_id)
+                message = _format_group_details(group, members, member_role=member_role)
+                keyboard = GroupKeyboard.get_group_actions_keyboard(group_id, member_role)
             
             await query.edit_message_text(
                 message,
@@ -247,47 +348,94 @@ async def _show_group_details(query, context: ContextTypes.DEFAULT_TYPE, group_i
         logger.error(f"Error showing group details: {e}", exc_info=True)
         await query.edit_message_text(ERROR_MSG)
 
-def _format_group_details(group: dict, members: list, user_role: GroupMemberRole = None) -> str:
-    """Format group details message."""
+def _format_group_details(
+    group: dict,
+    members: list,
+    member_role: GroupMemberRole = None,
+    is_member: bool = None
+) -> str:
+    """
+    Format group details message.
+    
+    Args:
+        group: Group data dict
+        members: List of group members
+        member_role: User's role (for private chat context with management options)
+        is_member: Whether user is a member (for group chat context with join option)
+    """
     description = group.get('description') or "No description"
-    role_display = user_role.value.title() if user_role else "Member"
     
     message = (
         f"<b>{group['name']}</b>\n\n"
         f"<b>Description:</b> {description}\n"
         f"<b>Default Currency:</b> {group['default_currency']}\n"
         f"<b>Members:</b> {len(members)}\n"
-        f"<b>Your Role:</b> {role_display}\n\n"
-        f"<i>Group ID: {group['id']}</i>"
     )
+    
+    # Show role if in private chat (member management context)
+    if member_role is not None:
+        role_display = member_role.value.title()
+        message += f"<b>Your Role:</b> {role_display}\n"
+    
+    message += f"\n<i>Group ID: {group['id']}</i>"
+    
+    # Show join hint if in group chat and not a member
+    if is_member is not None and not is_member:
+        message += "\n\n<i>Click 'Join Group' to start splitting bills!</i>"
+    elif is_member is not None and is_member:
+        message += "\n\n<i>You are already a member of this group.</i>"
     
     return message
 
 
-async def _handle_back_to_list(query, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    """Handle back to groups list navigation."""
-    groups = context.user_data.get('user_groups', [])
-    page = context.user_data.get('groups_page', 0)
-    
-    if not groups:
-        # Re-fetch groups if expired
-        try:
-            async with get_db() as db:
-                groups = await GroupService.get_all_groups_by_user_id(db, user_id)
-                context.user_data['user_groups'] = groups
-                context.user_data['groups_page'] = 0
-                page = 0
-        except Exception as e:
-            logger.error(f"Error fetching groups: {e}", exc_info=True)
-            await query.edit_message_text("Failed to load groups. Please use /groups again.")
-            return
-    
-    if not groups:
-        await query.edit_message_text("You are not a member of any groups yet.")
-        return
+async def _handle_back_to_list(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    is_group_chat: bool = False
+) -> None:
+    """Handle back to groups list navigation for both private and group chat contexts."""
+    if is_group_chat:
+        # Group chat context - use chat_data
+        groups = context.chat_data.get('chat_groups', [])
+        page = context.chat_data.get('chat_groups_page', 0)
         
-    message = _format_groups_list_message(groups, page=page)
-    keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
+        if not groups:
+            await query.edit_message_text("Groups list expired. Please use /groups again.")
+            return
+        
+        message = _format_groups_list_message(
+            groups,
+            page=page,
+            header="Expense Groups in this Chat",
+            footer="Select a group to view details and join."
+        )
+        keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
+    else:
+        # Private chat context - use user_data
+        groups = context.user_data.get('user_groups', [])
+        page = context.user_data.get('groups_page', 0)
+        
+        if not groups:
+            # Re-fetch groups if expired
+            try:
+                async with get_db() as db:
+                    groups = await GroupService.get_all_groups_by_user_id(db, user_id)
+                    context.user_data['user_groups'] = groups
+                    context.user_data['groups_page'] = 0
+                    page = 0
+            except Exception as e:
+                logger.error(f"Error fetching groups: {e}", exc_info=True)
+                await query.edit_message_text("Failed to load groups. Please use /groups again.")
+                return
+        
+        if not groups:
+            await query.edit_message_text("You are not a member of any groups yet.")
+            return
+        
+        message = _format_groups_list_message(groups, page=page)
+        keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
+    
     await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
 
 
