@@ -5,7 +5,8 @@ from bot.config import setup_commands
 from bot.handlers import start_command, profile_command, groups_command, create_group_callback_handler
 from bot.conversations import (
     create_update_conversation_handler,
-    create_group_conversation_handler
+    create_group_conversation_handler,
+    create_expense_conversation_handler
 )
 from infrastructure import close_db
 import logging
@@ -38,6 +39,7 @@ class Bot:
         # Add conversation handlers first (order matters - they should be before command handlers)
         self.app.add_handler(create_update_conversation_handler())
         self.app.add_handler(create_group_conversation_handler())
+        self.app.add_handler(create_expense_conversation_handler())
 
         # Add command handlers
         self.app.add_handler(CommandHandler("start", start_command))

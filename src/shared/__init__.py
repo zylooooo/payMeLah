@@ -10,6 +10,12 @@ from shared.exceptions.group_exceptions import (
     UnauthorizedGroupJoinException,
     UnauthorizedActionException
 )
+from shared.exceptions.expense_exceptions import (
+    InvalidSplitException,
+    ExpenseNotFoundException,
+    ExpenseValidationException,
+    ExpenseNotEditableException
+)
 
 __all__ = [
     "setup_logging",
@@ -19,5 +25,9 @@ __all__ = [
     "GroupMemberAlreadyExistsException",
     "GroupMemberNotFoundException",
     "UnauthorizedGroupJoinException",
-    "UnauthorizedActionException"
+    "UnauthorizedActionException",
+    "InvalidSplitException",
+    "ExpenseNotFoundException",
+    "ExpenseValidationException",
+    "ExpenseNotEditableException"
 ]
