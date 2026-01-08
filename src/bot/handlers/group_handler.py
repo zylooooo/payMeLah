@@ -377,8 +377,6 @@ def _format_group_details(
         role_display = member_role.value.title()
         message += f"<b>Your Role:</b> {role_display}\n"
     
-    message += f"\n<i>Group ID: {group['id']}</i>"
-    
     # Show join hint if in group chat and not a member
     if is_member is not None and not is_member:
         message += "\n\n<i>Click 'Join Group' to start splitting bills!</i>"
