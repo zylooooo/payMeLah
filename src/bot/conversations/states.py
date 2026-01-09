@@ -17,6 +17,7 @@ class CreateGroupStates(Enum):
 class CreateExpenseStates(Enum):
     """States for the create expense conversation."""
     SELECT_GROUP = auto()
+    SELECT_CURRENCY = auto()
     AMOUNT = auto()
     DESCRIPTION = auto()
     SELECT_PAYER = auto()

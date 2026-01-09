@@ -179,23 +179,11 @@ async def start_add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             context.user_data['expense_data']['group_id'] = group['id']
             context.user_data['expense_data']['currency'] = group['default_currency']
             context.user_data['expense_data']['group_name'] = group['name']
-            return await _prompt_amount(update, context)
+            return await _prompt_currency(update, context)
         else:
             # Let the users select the group that they want to add an expense to
             context.user_data['groups'] = groups
-            
-            message = (
-                "<b>Select a group to add expense to</b>"
-            )
-            keyboard = ExpenseKeyboard.get_group_selection_keyboard(groups)
-
-            sent_message = await update.message.reply_text(
-                message,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
-            context.user_data['last_message_id'] = sent_message.message_id
-            return CreateExpenseStates.SELECT_GROUP
+            return await _prompt_select_group(update, context)
     except Exception as e:
         logger.error(f"An unexpected error occured while creating an expense for user {telegram_user.id}: {e}", exc_info=True)
         await _send_or_edit_message(
@@ -209,6 +197,24 @@ async def start_add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ===================================================================================
 # State: SELECT_GROUP
 # ===================================================================================
+async def _prompt_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt the user to select a group."""
+    groups = context.user_data.get('groups')
+    if not groups:
+        logger.warning("No groups available for selection")
+        await _send_or_edit_message(
+            update,
+            context,
+            "No groups available. Please create or join a group first."
+        )
+        _cleanup_conversation(context)
+        return ConversationHandler.END
+    
+    message = "<b>Select a group to add expense to</b>"
+    keyboard = ExpenseKeyboard.get_group_selection_keyboard(groups)
+    await _send_or_edit_message(update, context, message, keyboard)
+    return CreateExpenseStates.SELECT_GROUP
+
 async def handle_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle group selection callback"""
     query = update.callback_query
@@ -249,7 +255,7 @@ async def handle_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data['expense_data']['currency'] = group['default_currency']
             context.user_data['expense_data']['group_name'] = group['name']
 
-            return await _prompt_amount(update, context)
+            return await _prompt_currency(update, context)
         except Exception as e:
             logger.error(f"An unexpected error occured while selecting a group for user {update.effective_user.id}: {e}", exc_info=True)
             await query.edit_message_text(ERROR_MSG)
@@ -258,6 +264,51 @@ async def handle_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Fall back
     return CreateExpenseStates.SELECT_GROUP
+
+# ===================================================================================
+# State: SELECT_CURRENCY
+# ===================================================================================
+async def _prompt_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt the user for currency selection."""
+    currency = context.user_data['expense_data'].get('currency', 'SGD')
+    message = (
+        "<b>Select Currency</b>\n\n"
+        "Please select the currency to record this expense in.\n"
+        "<i>E.g. SGD, MYR, USD etc.</i>\n\n"
+        f"If you wish to use the default currency of the group: <b>{currency}</b>, press 'Skip'"
+    )
+    keyboard = ExpenseKeyboard.get_navigation_keyboard(current_field='currency', is_first=False, show_skip=True)
+    await _send_or_edit_message(update, context, message, keyboard)
+    return CreateExpenseStates.SELECT_CURRENCY
+
+async def handle_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        action, _ = ExpenseKeyboard.extract_callback_info(query.data)
+
+        if action == ExpenseKeyboard.ACTION_CANCEL:
+            return cancel_expense(update, context)
+        if action == ExpenseKeyboard.ACTION_SKIP:
+            return await _prompt_amount(update, context)
+        if action == ExpenseKeyboard.ACTION_BACK:
+            return await _prompt_select_group(update, context)
+        
+        return CreateExpenseStates.SELECT_CURRENCY
+    
+    currency_code = update.message.text.strip().upper()
+    is_valid, error_msg = validate_currency_code(currency_code)
+    if not is_valid:
+        await _send_or_edit_message(
+            update,
+            context,
+            error_msg,
+            ExpenseKeyboard.get_navigation_keyboard(current_field='currency', is_first=False, show_skip=True)
+        )
+        return CreateExpenseStates.SELECT_CURRENCY
+    
+    context.user_data['expense_data']['currency'] = currency_code
+    return await _prompt_amount(update, context)
 
 # ===================================================================================
 # State: AMOUNT
@@ -270,7 +321,7 @@ async def _prompt_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Enter the expense amount in <b>{currency}</b>:\n"
         "<i>Example: 25.50</i>"
     )
-    keyboard = ExpenseKeyboard.get_navigation_keyboard(current_field='amount', is_first=True)
+    keyboard = ExpenseKeyboard.get_navigation_keyboard(current_field='amount', is_first=False, show_skip=False)
     await _send_or_edit_message(update, context, message, keyboard)
     return CreateExpenseStates.AMOUNT
 
@@ -283,6 +334,8 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_expense(update, context)
+        if action == ExpenseKeyboard.ACTION_BACK:
+            return await _prompt_currency(update, context)
         
         # Fallback
         return CreateExpenseStates.AMOUNT
@@ -295,7 +348,7 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             update,
             context,
             error_msg,
-            ExpenseKeyboard.get_navigation_keyboard(current_field='amount', is_first=True)
+            ExpenseKeyboard.get_navigation_keyboard(current_field='amount', is_first=False, show_skip=False)
         )
         return CreateExpenseStates.AMOUNT
     
@@ -779,6 +832,10 @@ def create_expense_conversation_handler() -> ConversationHandler:
         states={
             CreateExpenseStates.SELECT_GROUP: [
                 CallbackQueryHandler(handle_select_group, pattern=f"^{ExpenseKeyboard.PREFIX}")
+            ],
+            CreateExpenseStates.SELECT_CURRENCY: [
+                CallbackQueryHandler(handle_currency, pattern=f"^{ExpenseKeyboard.PREFIX}"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_currency)
             ],
             CreateExpenseStates.AMOUNT: [
                 CallbackQueryHandler(handle_amount, pattern=f"^{ExpenseKeyboard.PREFIX}"),
