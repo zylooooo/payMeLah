@@ -103,7 +103,8 @@ class ExpenseService:
                     user_id=participant_id,
                     share_amount=shares[i],
                     split_percentage=split_percentages[i] if split_percentages else None,
-                    is_settled=(participant_id == expense_data['payer_id']) # Payer's share is auto-settled
+                    is_settled=(participant_id == expense_data['payer_id']), # Payer's share is auto-settled
+                    settled_at=datetime.now(timezone.utc) if (participant_id == expense_data['payer_id']) else None
                 )
                 db.add(participant)
             
