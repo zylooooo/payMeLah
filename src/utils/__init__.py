@@ -4,7 +4,9 @@ from .validators import (
     validate_group_name,
     validate_expense_amount,
     validate_exact_split_amount,
-    validate_expense_description
+    validate_expense_description,
+    validate_percentage_split,
+    validate_custom_share
 )
 
 __all__ = [
@@ -13,5 +15,7 @@ __all__ = [
     "validate_group_name",
     "validate_expense_amount",
     "validate_exact_split_amount",
-    "validate_expense_description"
+    "validate_expense_description",
+    "validate_percentage_split",
+    "validate_custom_share"
 ]

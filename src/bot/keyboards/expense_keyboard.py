@@ -138,6 +138,14 @@ class ExpenseKeyboard:
                 "Exact Amounts",
                 callback_data=cls._build_callback_data(cls.ACTION_SELECT_SPLIT, ExpenseSplitType.EXACT.value)
             )],
+            [InlineKeyboardButton(
+                "By Percentage",
+                callback_data=cls._build_callback_data(cls.ACTION_SELECT_SPLIT, ExpenseSplitType.PERCENTAGE.value)
+            )],
+            [InlineKeyboardButton(
+                "Custom Shares",
+                callback_data=cls._build_callback_data(cls.ACTION_SELECT_SPLIT, ExpenseSplitType.CUSTOM.value)
+            )],
             [
                 InlineKeyboardButton("<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK)),
                 InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))

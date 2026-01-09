@@ -165,3 +165,72 @@ def validate_expense_description(description: str) -> Tuple[bool, Optional[str]]
         return False, f"Description cannot be longer than {MAX_DESCRIPTION_LENGTH} characters."
     
     return True, None
+
+def validate_percentage_split(
+    percentage_str: str,
+    already_allocated: Decimal = Decimal('0')
+) -> Tuple[bool, Optional[str], Optional[Decimal]]:
+    """
+    Validate a percentage input for percentage-based splits.
+
+    Args:
+        percentage_str: str - The percentage input by the user
+        already_allocated: Decimal - Sum of percentages already allocated
+    
+    Returns:
+        Tuple of (is_valid, error_message, validated_percentage)
+    """
+    if not percentage_str or not percentage_str.strip():
+        return False, "Percentage cannot be empty.", None
+    
+    # Remove % symbol if present
+    cleaned = percentage_str.strip().replace('%', '').strip()
+    
+    try:
+        percentage = Decimal(cleaned).quantize(Decimal('0.01'))
+        
+        if percentage <= Decimal('0'):
+            return False, "Percentage must be greater than 0.", None
+        
+        if percentage > Decimal('100'):
+            return False, "Percentage cannot exceed 100%.", None
+        
+        # Check if this would exceed 100% total
+        remaining = Decimal('100') - already_allocated
+        if percentage > remaining:
+            return False, f"Percentage cannot exceed remaining {remaining}%.", None
+        
+        return True, None, percentage
+    except InvalidOperation:
+        return False, "Invalid percentage. Please enter a valid number (e.g., 25 or 33.33).", None
+
+
+def validate_custom_share(
+    share_str: str
+) -> Tuple[bool, Optional[str], Optional[int]]:
+    """
+    Validate a custom share ratio input.
+
+    Args:
+        share_str: str - The share ratio input by the user (e.g., "2" for 2 shares)
+    
+    Returns:
+        Tuple of (is_valid, error_message, validated_share)
+    """
+    if not share_str or not share_str.strip():
+        return False, "Share cannot be empty.", None
+    
+    cleaned = share_str.strip()
+    
+    try:
+        share = int(cleaned)
+        
+        if share <= 0:
+            return False, "Share must be a positive whole number (1, 2, 3, etc.).", None
+        
+        if share > 100:
+            return False, "Share cannot exceed 100.", None
+        
+        return True, None, share
+    except ValueError:
+        return False, "Invalid share. Please enter a whole number (e.g., 1, 2, 3).", None

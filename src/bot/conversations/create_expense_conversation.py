@@ -11,8 +11,15 @@ from decimal import Decimal
 from typing import Optional
 from bot.keyboards import ExpenseKeyboard
 from .states import CreateExpenseStates
-from utils import validate_expense_amount, validate_expense_description, validate_currency_code, validate_exact_split_amount
-from services import ExpenseService, GroupService
+from utils import (
+    validate_expense_amount, 
+    validate_expense_description, 
+    validate_currency_code, 
+    validate_exact_split_amount,
+    validate_percentage_split,
+    validate_custom_share
+)
+from services import ExpenseService, GroupService, SplitCalculator
 from infrastructure import get_db
 from bot.utils import validate_chat_type
 from models import ExpenseSplitType
@@ -37,7 +44,9 @@ def _cleanup_conversation(context: ContextTypes.DEFAULT_TYPE) -> None:
         'selected_participants',
         'user_groups',
         'chat_groups',
-        'exact_amounts_pending'
+        'exact_amounts_pending',
+        'percentages_pending',
+        'custom_shares_pending'
     ]
     for key in keys_to_remove:
         context.user_data.pop(key, None)
@@ -538,7 +547,12 @@ async def handle_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         elif split_type == ExpenseSplitType.EXACT:
             # For exact split, need to collect amounts per participant
             return await _prompt_exact_amounts(update, context)
-        # Add more split types here if needed in the future
+        elif split_type == ExpenseSplitType.PERCENTAGE:
+            # For percentage split, need to collect percentages per participant
+            return await _prompt_percentages(update, context)
+        elif split_type == ExpenseSplitType.CUSTOM:
+            # For custom split, need to collect share ratios per participant
+            return await _prompt_custom_shares(update, context)
     
     return CreateExpenseStates.SELECT_SPLIT_TYPE
 
@@ -607,7 +621,7 @@ async def _prompt_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TY
         f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>"
     )
 
-    keyboard = ExpenseKeyboard.get_navigation_keyboard('exact', is_first=(current_index == 0))
+    keyboard = ExpenseKeyboard.get_navigation_keyboard('exact', is_first=False)
     await _send_or_edit_message(update, context, message, keyboard)
     return CreateExpenseStates.ENTER_EXACT_AMOUNTS
 
@@ -670,7 +684,7 @@ async def handle_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYP
             update,
             context,
             enhanced_error,
-            ExpenseKeyboard.get_navigation_keyboard('exact', is_first=(current_index == 0))
+            ExpenseKeyboard.get_navigation_keyboard('exact', is_first=False)
         )
         return CreateExpenseStates.ENTER_EXACT_AMOUNTS
     
@@ -686,6 +700,264 @@ async def handle_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # ===================================================================================
+# State: ENTER_PERCENTAGES
+# ===================================================================================
+async def _prompt_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt user to enter percentages for each participant."""
+    participant_ids = context.user_data['expense_data'].get('participant_ids', [])
+    members = context.user_data.get('group_members', [])
+    amount = context.user_data['expense_data'].get('amount', Decimal('0'))
+    currency = context.user_data['expense_data'].get('currency', 'SGD')
+
+    # Initialize pending percentages tracker if not exists
+    if 'percentages_pending' not in context.user_data:
+        context.user_data['percentages_pending'] = {
+            'percentages': {},
+            'current_index': 0
+        }
+    
+    pending = context.user_data['percentages_pending']
+    current_index = pending['current_index']
+
+    # Check if all percentages have been collected
+    if current_index >= len(participant_ids):
+        # All percentages collected, validate total equals 100%
+        percentages_list = [pending['percentages'][pid] for pid in participant_ids]
+        total_percentage = sum(percentages_list)
+
+        if abs(total_percentage - Decimal('100')) > Decimal('0.01'):
+            # Percentages don't sum to 100% - show error and reset
+            await _send_or_edit_message(
+                update, context,
+                f"<b>Percentages don't add up!</b>\n\n"
+                f"Total: 100%\n"
+                f"Sum entered: {total_percentage}%\n\n"
+                "Please re-enter the percentages.",
+                ExpenseKeyboard.get_navigation_keyboard('percentage', is_first=False)
+            )
+            # Reset and start over
+            context.user_data['percentages_pending'] = {
+                'percentages': {},
+                'current_index': 0
+            }
+            return await _prompt_percentages(update, context)
+        
+        # Store split data and proceed to summary
+        context.user_data['expense_data']['split_data'] = {'percentages': percentages_list}
+        return await _show_summary(update, context)
+    
+    # Get current participant info
+    current_participant_id = participant_ids[current_index]
+    current_member = next((m for m in members if m.get('user_id') == current_participant_id), {})
+    current_name = _get_member_display_name(current_member)
+
+    # Calculate remaining percentage
+    entered_so_far = sum(pending['percentages'].values())
+    remaining = Decimal('100') - entered_so_far
+
+    message = (
+        f"<b>Enter Percentages</b>\n\n"
+        f"Total expense: {currency} {amount}\n"
+        f"Remaining: {remaining}%\n\n"
+        f"<b>Enter percentage for {current_name}:</b>\n"
+        f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>\n"
+        f"<i>Example: 25 or 33.33</i>"
+    )
+
+    keyboard = ExpenseKeyboard.get_navigation_keyboard('percentage', is_first=False)
+    await _send_or_edit_message(update, context, message, keyboard)
+    return CreateExpenseStates.ENTER_PERCENTAGES
+
+
+async def handle_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle percentage input for each participant."""
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        action, _ = ExpenseKeyboard.extract_callback_info(query.data)
+
+        if action == ExpenseKeyboard.ACTION_CANCEL:
+            return await cancel_expense(update, context)
+        if action == ExpenseKeyboard.ACTION_BACK:
+            pending = context.user_data.get('percentages_pending', {})
+            current_index = pending.get('current_index', 0)
+
+            if current_index > 0:
+                # Go back to previous participant
+                participant_ids = context.user_data['expense_data'].get('participant_ids', [])
+                prev_participant_id = participant_ids[current_index - 1]
+
+                # Remove the previous percentage
+                pending['percentages'].pop(prev_participant_id, None)
+                pending['current_index'] = current_index - 1
+
+                return await _prompt_percentages(update, context)
+            else:
+                # Go back to split type selection
+                context.user_data.pop('percentages_pending', None)
+                return await _prompt_split_type(update, context)
+        
+        return CreateExpenseStates.ENTER_PERCENTAGES
+    
+    # Handle text input
+    pending = context.user_data.get('percentages_pending', {})
+    current_index = pending.get('current_index', 0)
+    
+    # Calculate already allocated percentage
+    already_allocated = sum(pending.get('percentages', {}).values())
+    
+    is_valid, error_msg, percentage = validate_percentage_split(
+        update.message.text,
+        already_allocated
+    )
+
+    if not is_valid:
+        # Enhance error message with context
+        remaining = Decimal('100') - already_allocated
+        enhanced_error = (
+            f"⚠️ {error_msg}\n\n"
+            f"<b>Enter Percentages</b>\n\n"
+            f"Already allocated: {already_allocated}%\n"
+            f"Remaining: {remaining}%"
+        )
+        await _send_validation_error(
+            update,
+            context,
+            enhanced_error,
+            ExpenseKeyboard.get_navigation_keyboard('percentage', is_first=False)
+        )
+        return CreateExpenseStates.ENTER_PERCENTAGES
+    
+    # Store the percentage for this participant
+    participant_ids = context.user_data['expense_data'].get('participant_ids', [])
+    current_participant_id = participant_ids[current_index]
+
+    pending['percentages'][current_participant_id] = percentage
+    pending['current_index'] = current_index + 1
+
+    # Continue to next participant or summary
+    return await _prompt_percentages(update, context)
+
+
+# ===================================================================================
+# State: ENTER_CUSTOM_SHARES
+# ===================================================================================
+async def _prompt_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt user to enter custom share ratios for each participant."""
+    participant_ids = context.user_data['expense_data'].get('participant_ids', [])
+    members = context.user_data.get('group_members', [])
+    amount = context.user_data['expense_data'].get('amount', Decimal('0'))
+    currency = context.user_data['expense_data'].get('currency', 'SGD')
+
+    # Initialize pending shares tracker if not exists
+    if 'custom_shares_pending' not in context.user_data:
+        context.user_data['custom_shares_pending'] = {
+            'shares': {},
+            'current_index': 0
+        }
+    
+    pending = context.user_data['custom_shares_pending']
+    current_index = pending['current_index']
+
+    # Check if all shares have been collected
+    if current_index >= len(participant_ids):
+        # All shares collected, store and proceed to summary
+        shares_list = [pending['shares'][pid] for pid in participant_ids]
+        
+        # Store split data
+        context.user_data['expense_data']['split_data'] = {'shares': shares_list}
+        return await _show_summary(update, context)
+    
+    # Get current participant info
+    current_participant_id = participant_ids[current_index]
+    current_member = next((m for m in members if m.get('user_id') == current_participant_id), {})
+    current_name = _get_member_display_name(current_member)
+
+    # Show entered shares so far
+    shares_so_far = list(pending['shares'].values())
+    shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
+
+    message = (
+        f"<b>Enter Custom Shares</b>\n\n"
+        f"Total expense: {currency} {amount}\n"
+        f"Shares entered: {shares_display}\n\n"
+        f"<b>Enter share for {current_name}:</b>\n"
+        f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>\n\n"
+        f"<i>Enter a number representing their share ratio.</i>\n"
+        f"<i>E.g., if A=1, B=2, C=1, then B pays double.</i>"
+    )
+
+    keyboard = ExpenseKeyboard.get_navigation_keyboard('custom', is_first=False)
+    await _send_or_edit_message(update, context, message, keyboard)
+    return CreateExpenseStates.ENTER_CUSTOM
+
+
+async def handle_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle custom share ratio input for each participant."""
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        action, _ = ExpenseKeyboard.extract_callback_info(query.data)
+
+        if action == ExpenseKeyboard.ACTION_CANCEL:
+            return await cancel_expense(update, context)
+        if action == ExpenseKeyboard.ACTION_BACK:
+            pending = context.user_data.get('custom_shares_pending', {})
+            current_index = pending.get('current_index', 0)
+
+            if current_index > 0:
+                # Go back to previous participant
+                participant_ids = context.user_data['expense_data'].get('participant_ids', [])
+                prev_participant_id = participant_ids[current_index - 1]
+
+                # Remove the previous share
+                pending['shares'].pop(prev_participant_id, None)
+                pending['current_index'] = current_index - 1
+
+                return await _prompt_custom_shares(update, context)
+            else:
+                # Go back to split type selection
+                context.user_data.pop('custom_shares_pending', None)
+                return await _prompt_split_type(update, context)
+        
+        return CreateExpenseStates.ENTER_CUSTOM
+    
+    # Handle text input
+    pending = context.user_data.get('custom_shares_pending', {})
+    current_index = pending.get('current_index', 0)
+    
+    is_valid, error_msg, share = validate_custom_share(update.message.text)
+
+    if not is_valid:
+        # Enhance error message with context
+        shares_so_far = list(pending.get('shares', {}).values())
+        shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
+        enhanced_error = (
+            f"⚠️ {error_msg}\n\n"
+            f"<b>Enter Custom Shares</b>\n\n"
+            f"Shares entered so far: {shares_display}\n"
+            f"<i>Enter a whole number (1, 2, 3, etc.)</i>"
+        )
+        await _send_validation_error(
+            update,
+            context,
+            enhanced_error,
+            ExpenseKeyboard.get_navigation_keyboard('custom', is_first=False)
+        )
+        return CreateExpenseStates.ENTER_CUSTOM
+    
+    # Store the share for this participant
+    participant_ids = context.user_data['expense_data'].get('participant_ids', [])
+    current_participant_id = participant_ids[current_index]
+
+    pending['shares'][current_participant_id] = share
+    pending['current_index'] = current_index + 1
+
+    # Continue to next participant or summary
+    return await _prompt_custom_shares(update, context)
+
+
+# ===================================================================================
 # State: SUMMARY
 # ===================================================================================
 async def _show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -693,28 +965,68 @@ async def _show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     expense_data = context.user_data.get('expense_data', {})
     members = context.user_data.get('group_members', [])
 
-    # Get participant names
+    # Get participant info (maintaining order)
     participant_ids = expense_data.get('participant_ids', [])
-    participant_names = [
-        _get_member_display_name(m)
-        for m in members if m.get('user_id') in participant_ids
-    ]
+    participants = []
+    for pid in participant_ids:
+        member = next((m for m in members if m.get('user_id') == pid), {})
+        participants.append({
+            'user_id': pid,
+            'name': _get_member_display_name(member)
+        })
 
-    amount = expense_data.get('amount', 0)
+    amount = expense_data.get('amount', Decimal('0'))
     currency = expense_data.get('currency', 'SGD')
     description = expense_data.get('description') or 'No description'
     payer_name = expense_data.get('payer_name', 'Unknown')
     split_type = expense_data.get('split_type', ExpenseSplitType.EQUAL)
     group_name = expense_data.get('group_name', 'Unknown Group')
+    split_data = expense_data.get('split_data', {})
+
+    # Calculate the split amounts based on split type
+    try:
+        if split_type == ExpenseSplitType.EQUAL:
+            share_amounts = SplitCalculator.calculate_equal_split(amount, len(participants))
+        elif split_type == ExpenseSplitType.EXACT:
+            share_amounts = split_data.get('amounts', [])
+        elif split_type == ExpenseSplitType.PERCENTAGE:
+            percentages = split_data.get('percentages', [])
+            share_amounts = SplitCalculator.calculate_percentage_split(amount, percentages)
+        elif split_type == ExpenseSplitType.CUSTOM:
+            shares = split_data.get('shares', [])
+            share_amounts = SplitCalculator.calculate_custom_split(amount, shares)
+        else:
+            share_amounts = [amount / len(participants)] * len(participants)
+    except Exception as e:
+        logger.error(f"Error calculating split amounts for summary: {e}", exc_info=True)
+        share_amounts = [Decimal('0')] * len(participants)
+
+    # Build the breakdown section
+    breakdown_lines = []
+    for i, participant in enumerate(participants):
+        share = share_amounts[i] if i < len(share_amounts) else Decimal('0')
+        line = f"  • {participant['name']}: {currency} {share}"
+        
+        # Add extra info for percentage/custom splits
+        if split_type == ExpenseSplitType.PERCENTAGE and split_data.get('percentages'):
+            pct = split_data['percentages'][i] if i < len(split_data['percentages']) else 0
+            line += f" ({pct}%)"
+        elif split_type == ExpenseSplitType.CUSTOM and split_data.get('shares'):
+            share_ratio = split_data['shares'][i] if i < len(split_data['shares']) else 0
+            line += f" ({share_ratio} share{'s' if share_ratio != 1 else ''})"
+        
+        breakdown_lines.append(line)
+    
+    breakdown_text = "\n".join(breakdown_lines)
 
     message = (
-        "<b>Expense Summary</b>\n\n"
+        "<b>📋 Expense Summary</b>\n\n"
         f"<b>Group:</b> {group_name}\n"
         f"<b>Description:</b> {description}\n"
-        f"<b>Amount:</b> {currency} {amount}\n"
+        f"<b>Total:</b> {currency} {amount}\n"
         f"<b>Paid by:</b> {payer_name}\n"
-        f"<b>Split between:</b> {', '.join(participant_names)}\n"
         f"<b>Split type:</b> {split_type.value.title()}\n\n"
+        f"<b>Breakdown:</b>\n{breakdown_text}\n\n"
         "Confirm to add this expense?"
     )
 
@@ -742,6 +1054,20 @@ async def handle_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 'current_index': 0
             }
             return await _prompt_exact_amounts(update, context)
+        elif split_type == ExpenseSplitType.PERCENTAGE:
+            # Reset percentages and go back to re-enter
+            context.user_data['percentages_pending'] = {
+                'percentages': {},
+                'current_index': 0
+            }
+            return await _prompt_percentages(update, context)
+        elif split_type == ExpenseSplitType.CUSTOM:
+            # Reset custom shares and go back to re-enter
+            context.user_data['custom_shares_pending'] = {
+                'shares': {},
+                'current_index': 0
+            }
+            return await _prompt_custom_shares(update, context)
         else:
             return await _prompt_split_type(update, context)
     
@@ -857,6 +1183,14 @@ def create_expense_conversation_handler() -> ConversationHandler:
             CreateExpenseStates.ENTER_EXACT_AMOUNTS: [
                 CallbackQueryHandler(handle_exact_amounts, pattern=f"^{ExpenseKeyboard.PREFIX}"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exact_amounts)
+            ],
+            CreateExpenseStates.ENTER_PERCENTAGES: [
+                CallbackQueryHandler(handle_percentages, pattern=f"^{ExpenseKeyboard.PREFIX}"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_percentages)
+            ],
+            CreateExpenseStates.ENTER_CUSTOM: [
+                CallbackQueryHandler(handle_custom_shares, pattern=f"^{ExpenseKeyboard.PREFIX}"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_shares)
             ],
             CreateExpenseStates.SUMMARY: [
                 CallbackQueryHandler(handle_summary, pattern=f"^{ExpenseKeyboard.PREFIX}")
