@@ -297,7 +297,7 @@ async def handle_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
 
         if action == ExpenseKeyboard.ACTION_CANCEL:
-            return cancel_expense(update, context)
+            return await cancel_expense(update, context)
         if action == ExpenseKeyboard.ACTION_SKIP:
             return await _prompt_amount(update, context)
         if action == ExpenseKeyboard.ACTION_BACK:
