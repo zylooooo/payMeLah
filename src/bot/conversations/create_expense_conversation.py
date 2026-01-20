@@ -509,6 +509,12 @@ async def handle_participant_selection(update: Update, context: ContextTypes.DEF
             return CreateExpenseStates.SELECT_PARTICIPANTS
         
         context.user_data['expense_data']['participant_ids'] = selected
+        
+        # If only one participant, skip split type selection (default to equal)
+        if len(selected) == 1:
+            context.user_data['expense_data']['split_type'] = ExpenseSplitType.EQUAL
+            return await _show_summary(update, context)
+        
         return await _prompt_split_type(update, context)
     
     return CreateExpenseStates.SELECT_PARTICIPANTS

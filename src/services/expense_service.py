@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 from models import Expense, ExpenseParticipant, ExpenseSplitType, Group
 from shared import (
@@ -9,9 +9,11 @@ from shared import (
     InvalidSplitException,
     GroupNotFoundException,
     GroupMemberNotFoundException,
-    UnauthorizedActionException
+    UnauthorizedActionException,
+    UserNotFoundException
 )
 from .group_service import GroupService
+from .user_service import UserService
 from .split_calculator import SplitCalculator
 from typing import Optional, List, Dict, Any
 from decimal import Decimal
@@ -108,6 +110,15 @@ class ExpenseService:
                 )
                 db.add(participant)
             
+            # Check if all participants are settled (e.g., single participant who is also the payer)
+            # If so, mark the expense itself as settled
+            all_participants_settled = all(
+                participant_id == expense_data['payer_id']
+                for participant_id in expense_data['participant_ids']
+            )
+            if all_participants_settled:
+                new_expense.is_settled = True
+            
             await db.commit()
             await db.refresh(new_expense)
 
@@ -187,3 +198,277 @@ class ExpenseService:
         else:
             logger.error(f"Invalid split type provided: {split_type}")
             raise InvalidSplitException(f"Invalid split type {split_type} provided.")
+    
+    @staticmethod
+    async def get_expense_by_id(db: AsyncSession, expense_id: int) -> Optional[dict]:
+        """
+        Function to get an expense by it's ID.
+
+        Args:
+            db: AsyncSession - The database session.
+            expense_id: int - The ID of the expense to get.
+        
+        Returns:
+            Optional[dict] - The expense data if found, None otherwise.
+        """
+        logger.info(f"Getting expense by ID: {expense_id}")
+        result = await db.execute(
+            select(Expense).where(Expense.id == expense_id)
+        )
+        expense = result.scalar_one_or_none()
+
+        if not expense:
+            logger.warning(f"Expense with ID {expense_id} not found")
+            raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
+        
+        logger.info(f"Expense with ID {expense_id} found successfully")
+        return expense.to_dict()
+    
+    @staticmethod
+    async def get_expenses_by_group_id(
+        db: AsyncSession,
+        group_id: int,
+        requesting_user_id: int,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[dict]:
+        """
+        Get expenses by group ID with pagination.
+
+        Args:
+            db: AsyncSession - The database session.
+            group_id: int - The ID of the group to get expenses for.
+            requesting_user_id: int - The ID of the user requesting the expenses. For authorization purposes (User must be a member of the group)
+            limit: int - The maximum number of expenses to return (default = 10)
+            offset: int - The number of expenses to skip (default = 0)
+        
+        Returns:
+            List[dict] - A list of expense dictionaries in descending order of expense date.
+        
+        Raises:
+            GroupNotFoundException - If the group does not exist.
+            UnautorizedActionException - If the user does not belong to the group.
+        """
+        logger.info(f"Getting expenses for group {group_id}")
+
+        # Verify if the group exists, method will raise exception if group not found
+        group = await GroupService.get_group_by_id(db, group_id)
+        if not group:
+            raise GroupNotFoundException(f"Group with ID {group_id} not found")
+        
+        if not await GroupService.is_member(db, group_id, requesting_user_id):
+            raise UnauthorizedActionException(f"User {requesting_user_id} is requesting expenses for group {group_id} that they are not a member of.")
+        
+        # Get expenses with pagination
+        result = await db.execute(
+            select(Expense)
+            .where(Expense.group_id == group_id)
+            .order_by(Expense.expense_date.desc(), Expense.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        expenses = result.scalars().all()
+
+        logger.info(f"Successfully found {len(expenses)} expenses for group {group_id}")
+        return [expense.to_dict() for expense in expenses]
+    
+    @staticmethod
+    async def get_expense_count_by_group_id(
+        db: AsyncSession,
+        group_id: int,
+        requesting_user_id: int
+    ) -> int:
+        """
+        Get the total count of expenses in a group.
+        Used for server-side pagination.
+
+        Args:
+            db: AsyncSession - The database session.
+            group_id: int - The ID of the group to count expenses for.
+            requesting_user_id: int - The ID of the user requesting. For authorization purposes.
+        
+        Returns:
+            int - Total count of expenses in the group.
+        
+        Raises:
+            GroupNotFoundException - If the group does not exist.
+            UnauthorizedActionException - If the user does not belong to the group.
+        """
+        logger.info(f"Getting expense count for group {group_id}")
+
+        # Verify if the group exists
+        group = await GroupService.get_group_by_id(db, group_id)
+        if not group:
+            raise GroupNotFoundException(f"Group with ID {group_id} not found")
+        
+        if not await GroupService.is_member(db, group_id, requesting_user_id):
+            raise UnauthorizedActionException(
+                f"User {requesting_user_id} is not a member of group {group_id}."
+            )
+        
+        # Get count
+        result = await db.execute(
+            select(func.count(Expense.id))
+            .where(Expense.group_id == group_id)
+        )
+        count = result.scalar()
+
+        logger.info(f"Found {count} expenses for group {group_id}")
+        return count or 0
+    
+    @staticmethod
+    async def get_expenses_by_user_id(
+        db: AsyncSession,
+        user_id: int,
+        group_id: Optional[int] = None,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[dict]:
+        """
+        Get expenses of a user regardless if the user is a payer or participant.
+        Supports pagination as well as optional filtering by group ID.
+
+        Args:
+            db: AsyncSession - The database session.
+            user_id: int - The ID of the user to get expenses for.
+            group_id: Optional[int] - The ID of the group to filter expenses by. If not provided, all expenses will be returned.
+            limit: int - The maximum number of expenses to return (default = 10)
+            offset: int - The number of expenses to skip (default = 0)
+        
+        Returns:
+            List[dict] - A list of expense dictionaries in descending order of expense date.
+        """
+        logger.info(f"Getting expenses for user {user_id}")
+
+        # Verify if the user exists
+        user = await UserService.get_user_by_id(db, user_id)
+        if not user:
+            raise UserNotFoundException(f"User with ID {user_id} not found, unable to get expenses for this user.")
+        
+        # Build the base query
+        query = (
+            select(Expense)
+            .distinct()
+            .outerjoin(ExpenseParticipant, Expense.id == ExpenseParticipant.expense_id)
+            .where(
+                or_(
+                    Expense.payer_id == user_id,
+                    ExpenseParticipant.user_id == user_id
+                )
+            )
+        )
+
+        # Only add group filter if group ID is provided and group exists
+        if group_id is not None and await GroupService.get_group_by_id(db, group_id):
+            # Verify that the member is a member of the group
+            if not await GroupService.is_member(db, group_id, user_id):
+                logger.warning(f"User {user_id} is not a member of group {group_id}, they are unable to get expenses for this group.")
+                raise UnauthorizedActionException(f"User {user_id} is not a member of group {group_id}, they are unable to get expenses for this group.")
+            query = query.where(Expense.group_id == group_id)
+        
+        query = query.order_by(Expense.expense_date.desc(), Expense.created_at.desc())
+        query = query.limit(limit).offset(offset)
+
+        result = await db.execute(query)
+        expenses = result.scalars().all()
+
+        logger.info(f"Successfully found {len(expenses)} expenses for user {user_id}")
+        return [expense.to_dict() for expense in expenses]
+    
+    @staticmethod
+    async def get_expense_participants(
+        db: AsyncSession,
+        expense_id: int,
+        requesting_user_id: Optional[int] = None
+    ) -> List[dict]:
+        """
+        Get all participants for an expense with their user details.
+
+        Args:
+            db: AsyncSession - The database session.
+            expense_id: int - The expense ID.
+            requesting_user_id: Optional[int] - If provided, check if the user can view the expense
+
+        Returns:
+            List[dict] - A list of participant dictionaries with user details.
+        
+        Raises:
+            ExpenseNotFoundException - If the expense does not exist.
+            UnauthorizedActionException - If the user is not a member of the group the expense belongs to.
+        """
+        logger.info(f"Getting participants for expense {expense_id}")
+
+        # First get the expense to verify it exists and get the group ID
+        result = await db.execute(
+            select(Expense).where(Expense.id == expense_id)
+        )
+        expense = result.scalar_one_or_none()
+
+        if not expense:
+            logger.warning(f"Expense with ID {expense_id} not found, unable to view participants for this expense.")
+            raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found, unable to view participants for this expense.")
+        
+        # Optional authorization check if requesting user ID is provided
+        if requesting_user_id is not None and not await GroupService.is_member(db, expense.group_id, requesting_user_id):
+            logger.warning(f"User {requesting_user_id} is not a member of group {expense.group_id}, they are unable to view participants for this expense.")
+            raise UnauthorizedActionException(f"User {requesting_user_id} is not a member of group {expense.group_id}, they are unable to view participants for this expense.")
+
+        # Get participants with user details
+        result = await db.execute(
+            select(ExpenseParticipant)
+            .where(ExpenseParticipant.expense_id == expense_id)
+            .order_by(ExpenseParticipant.user_id)
+        )
+        participants = result.scalars().all()
+
+        # Enrich with user details
+        participants_with_details = []
+        for participant in participants:
+            participant_dict = participant.to_dict()
+            user = await UserService.get_user_by_id(db, participant.user_id)
+            if user:
+                participant_dict['username'] = user.get('username')
+                participant_dict['first_name'] = user.get('first_name')
+                participant_dict['last_name'] = user.get('last_name')
+                participants_with_details.append(participant_dict)
+            else:
+                logger.warning(f"User with ID {participant.user_id} not found, unable to include user details for this expense participant. Skipping this participant...")
+                
+        
+        logger.info(f"Successfully found {len(participants_with_details)} participants for expense {expense_id}")
+        return participants_with_details
+    
+    @staticmethod
+    async def get_expense_with_participants(
+        db: AsyncSession,
+        expense_id: int,
+        requesting_user_id: int
+    ) -> dict:
+        """
+        Get expense details with all participants and user details.
+        Orchestrator method that combines get_expense_by_id and get_expense_participants.
+
+        Args:
+            db: AsyncSession - The database session.
+            expens_id: int - The expense ID.
+            requesting_user_id: int - The user requesting the details, for authorization purposes
+        
+        Returns:
+            dict - Expense dictionary data with 'participants' key containing participant list.
+        
+        Raises:
+            ExpenseNotFoundException - If the expense doesn't exist.
+            UnauthorizedActionException - If user is not a group member.
+        """
+        logger.info(f"Getting expense {expense_id} with participants details for user {requesting_user_id}")
+
+        expense_dict = await ExpenseService.get_expense_by_id(db, expense_id)
+
+        if not await GroupService.is_member(db, expense_dict['group_id'], requesting_user_id):
+            raise UnauthorizedActionException(f"User {requesting_user_id} is not a member of group {expense_dict['group_id']}, they are unable to view this expense.")
+        
+        # Get participants 
+        participants = await ExpenseService.get_expense_participants(db, expense_id)
+
+        expense_dict['participants'] = participants
+        return expense_dict

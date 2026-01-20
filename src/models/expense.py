@@ -51,6 +51,7 @@ class Expense(Base):
             'amount': self.amount,
             'currency': self.currency,
             'payer_id': self.payer_id,
+            'expense_date': self.expense_date.isoformat() if self.expense_date else None,
             'category': self.category,
             'split_type': self.split_type.value if self.split_type else None,
             'created_by': self.created_by,

@@ -191,44 +191,105 @@ class ExpenseKeyboard:
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
-    def get_expense_list_keyboard(cls, expenses: List[dict], page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
-        """Keyboard for listing expenses."""
+    def get_expense_list_keyboard(
+        cls,
+        expenses: List[dict],
+        group_id: int,
+        page: int = 0,
+        per_page: int = 5,
+        total_count: int = 0,
+        show_back_to_groups: bool = False
+    ) -> InlineKeyboardMarkup:
+        """
+        Keyboard for listing expenses with view buttons.
+        Designed for server-side pagination - receives only current page expenses.
+
+        Args:
+            expenses: List[dict] - The expenses for the CURRENT PAGE only (not full list)
+            group_id: int - Current group ID (for pagination and back navigation)
+            page: int - Current page number (0-indexed, default = 0)
+            per_page: int - Number of expenses per page (default = 5)
+            total_count: int - Total number of expenses in the group (for pagination calculation)
+            show_back_to_groups: bool - Whether to show "Back to Groups" button
+        
+        Returns:
+            InlineKeyboardMarkup - The keyboard markup for expense list view.
+        """
         buttons = []
-        
+
+        # Calculate the starting index for display numbering
         start_idx = page * per_page
-        end_idx = start_idx + per_page
-        page_expenses = expenses[start_idx:end_idx]
-        
-        for expense in page_expenses:
-            desc = expense.get('description', 'No description')[:25]
-            amount = expense.get('amount', 0)
-            currency = expense.get('currency', 'SGD')
-            
+
+        # Expense view buttons with index numbers
+        for idx, expense in enumerate(expenses, start=start_idx + 1):
             buttons.append([
                 InlineKeyboardButton(
-                    f"{desc} - {currency} {amount}",
+                    f"View #{idx}",
                     callback_data=cls._build_callback_data(cls.ACTION_VIEW_DETAILS, str(expense['id']))
                 )
             ])
         
-        # Pagination
+        # Pagination with group context
         nav_buttons = []
+        total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+        has_next_page = (page + 1) < total_pages
+
         if page > 0:
             nav_buttons.append(
-                InlineKeyboardButton("<< Previous", callback_data=cls._build_callback_data(cls.ACTION_PREV, str(page - 1)))
+                InlineKeyboardButton(
+                    "<< Previous",
+                    callback_data=cls._build_callback_data(cls.ACTION_PREV, f"{group_id}:{page - 1}")
+                )
             )
-        if end_idx < len(expenses):
+        
+        if total_pages > 1:
             nav_buttons.append(
-                InlineKeyboardButton("Next >>", callback_data=cls._build_callback_data(cls.ACTION_NEXT, str(page + 1)))
+                InlineKeyboardButton(
+                    f"{page + 1}/{total_pages}",
+                    callback_data="noop"
+                )
             )
+        
+        if has_next_page:
+            nav_buttons.append(
+                InlineKeyboardButton(
+                    "Next >>",
+                    callback_data=cls._build_callback_data(cls.ACTION_NEXT, f"{group_id}:{page + 1}")
+                )
+            )
+        
         if nav_buttons:
             buttons.append(nav_buttons)
         
-        buttons.append([
-            InlineKeyboardButton("X Close", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
-        ])
+        # Back to group button (optional)
+        if show_back_to_groups:
+            buttons.append([
+                InlineKeyboardButton(
+                    "<< Back to Groups",
+                    callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST)
+                )
+            ])
         
+        buttons.append([
+            InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
+        ])
+    
         return InlineKeyboardMarkup(buttons)
+    
+    @classmethod
+    def get_expense_details_keyboard(cls, group_id: int) -> InlineKeyboardMarkup:
+        """Keyboard for expense detail view with back to list button."""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "<< Back to list",
+                    callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST, str(group_id))
+                )
+            ],
+            [
+                InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
+            ]
+        ])
 
     @classmethod
     def _build_callback_data(cls, action: str, data: Optional[str] = None) -> str:
