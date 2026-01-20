@@ -13,7 +13,8 @@ from bot.handlers import (
 from bot.conversations import (
     create_update_conversation_handler,
     create_group_conversation_handler,
-    create_expense_conversation_handler
+    create_expense_conversation_handler,
+    create_edit_expense_conversation_handler
 )
 from infrastructure import close_db
 import logging
@@ -47,6 +48,7 @@ class Bot:
         self.app.add_handler(create_update_conversation_handler())
         self.app.add_handler(create_group_conversation_handler())
         self.app.add_handler(create_expense_conversation_handler())
+        self.app.add_handler(create_edit_expense_conversation_handler())
 
         # Add command handlers
         self.app.add_handler(CommandHandler("start", start_command))

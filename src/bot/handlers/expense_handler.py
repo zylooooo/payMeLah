@@ -8,7 +8,8 @@ from bot.utils import validate_chat_type
 from shared import (
     ExpenseNotFoundException,
     UnauthorizedActionException,
-    GroupNotFoundException
+    GroupNotFoundException,
+    ExpenseNotEditableException
 )
 from datetime import datetime, date
 import logging
@@ -414,10 +415,19 @@ async def _show_expense_details(
                 payer_user = await UserService.get_user_by_id(db, payer_id)
                 if payer_user:
                     payer_name = payer_user.get('first_name') or payer_user.get('username') or f"User {payer_id}"
+            
+            # Check if user can modify this expense
+            can_modify, _ = await ExpenseService.can_modify_expense(
+                db, expense_id, telegram_user.id
+            )
         
         message = _format_expense_details(expense_data, expense_data.get('participants', []), payer_name)
         group_id = expense_data.get('group_id')
-        keyboard = ExpenseKeyboard.get_expense_details_keyboard(group_id)
+        keyboard = ExpenseKeyboard.get_expense_details_keyboard(
+            expense_id=expense_id,
+            group_id=group_id,
+            can_modify=can_modify
+        )
         
         await query.edit_message_text(
             message,
@@ -605,6 +615,87 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
             else:
                 await query.edit_message_text("Groups list expired. Please use /expenses again.")
         return
+    
+    # Handle delete expense
+    if action == ExpenseKeyboard.ACTION_DELETE:
+        if not data:
+            await query.edit_message_text("Invalid expense selection.")
+            return
+        
+        try:
+            expense_id = int(data)
+            
+            # Check authorization before showing confirmation
+            async with get_db() as db:
+                can_modify, reason = await ExpenseService.can_modify_expense(
+                    db, expense_id, telegram_user.id
+                )
+            
+            if not can_modify:
+                await query.answer(reason, show_alert=True)
+                return
+            
+            # Show delete confirmation
+            keyboard = ExpenseKeyboard.get_delete_confirmation_keyboard(expense_id)
+            await query.edit_message_text(
+                "<b>Delete Expense</b>\n\n"
+                "Are you sure you want to delete this expense?\n\n"
+                "This action cannot be undone.",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+        except ValueError:
+            await query.edit_message_text("Invalid expense ID.")
+        except Exception as e:
+            logger.error(f"Error preparing delete confirmation: {e}", exc_info=True)
+            await query.edit_message_text(ERROR_MSG)
+        return
+    
+    # Handle confirm delete
+    if action == ExpenseKeyboard.ACTION_CONFIRM_DELETE:
+        if not data:
+            await query.edit_message_text("Invalid expense selection.")
+            return
+        
+        try:
+            expense_id = int(data)
+            
+            # Get group_id before deletion for navigation
+            async with get_db() as db:
+                expense_data = await ExpenseService.get_expense_by_id(db, expense_id)
+                group_id = expense_data.get('group_id')
+                
+                # Perform deletion
+                await ExpenseService.delete_expense(db, expense_id, telegram_user.id)
+            
+            logger.info(f"User {telegram_user.id} deleted expense {expense_id}")
+            
+            # Get group name for navigation back to list
+            if is_group_chat:
+                group_name = context.chat_data.get('expense_view_group_name', 'Group')
+            else:
+                group_name = context.user_data.get('expense_view_group_name', 'Group')
+            
+            await query.edit_message_text(
+                "Expense deleted successfully.",
+                parse_mode="HTML"
+            )
+            
+            # After a brief moment, we could show the list again
+            # For now, user can use /expenses to see updated list
+            
+        except ExpenseNotFoundException:
+            await query.edit_message_text("Expense not found. It may have already been deleted.")
+        except UnauthorizedActionException as e:
+            await query.edit_message_text(str(e))
+        except ExpenseNotEditableException as e:
+            await query.edit_message_text(str(e))
+        except ValueError:
+            await query.edit_message_text("Invalid expense ID.")
+        except Exception as e:
+            logger.error(f"Error deleting expense: {e}", exc_info=True)
+            await query.edit_message_text(ERROR_MSG)
+        return
 
 
 # ===================================================================================
@@ -612,10 +703,10 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
 # ===================================================================================
 def create_expense_view_callback_handler() -> CallbackQueryHandler:
     """
-    Create and return the callback handler for expense viewing.
-    This handles: group selection, pagination, view details, back to list, cancel.
+    Create and return the callback handler for expense viewing and deletion.
+    This handles: group selection, pagination, view details, back to list, delete, cancel.
     """
     return CallbackQueryHandler(
         handle_expense_view_callback,
-        pattern=f"^{ExpenseKeyboard.PREFIX}(select|view|prev|next|back_list|cancel)"
+        pattern=f"^{ExpenseKeyboard.PREFIX}(select|view|prev|next|back_list|delete|confirm_del|cancel)"
     )

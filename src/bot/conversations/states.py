@@ -27,3 +27,19 @@ class CreateExpenseStates(Enum):
     ENTER_PERCENTAGES = auto()
     ENTER_CUSTOM = auto()
     SUMMARY = auto()
+
+
+class EditExpenseStates(Enum):
+    """States for the edit expense conversation."""
+    SELECT_FIELD = auto()           # Main edit menu
+    EDIT_DESCRIPTION = auto()       # Text input for description
+    EDIT_AMOUNT = auto()            # Number input for amount
+    EDIT_CURRENCY = auto()          # Currency code input
+    EDIT_DATE = auto()              # Date input
+    EDIT_PAYER = auto()             # Member selection
+    EDIT_PARTICIPANTS = auto()      # Multi-select participants
+    EDIT_SPLIT_TYPE = auto()        # Split type selection
+    ENTER_EXACT_AMOUNTS = auto()    # Per-participant exact amounts
+    ENTER_PERCENTAGES = auto()      # Per-participant percentages
+    ENTER_CUSTOM_SHARES = auto()    # Per-participant share ratios
+    SUMMARY = auto()                # Confirm changes before saving
