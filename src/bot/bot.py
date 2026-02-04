@@ -8,7 +8,11 @@ from bot.handlers import (
     groups_command,
     create_group_callback_handler,
     expenses_command,
-    create_expense_view_callback_handler
+    create_expense_view_callback_handler,
+    balances_command,
+    mybalance_command,
+    mytotal_command,
+    create_balance_callback_handler
 )
 from bot.conversations import (
     create_update_conversation_handler,
@@ -55,10 +59,14 @@ class Bot:
         self.app.add_handler(CommandHandler("profile", profile_command))
         self.app.add_handler(CommandHandler('groups', groups_command))
         self.app.add_handler(CommandHandler('expenses', expenses_command))
+        self.app.add_handler(CommandHandler('balances', balances_command))
+        self.app.add_handler(CommandHandler('mybalance', mybalance_command))
+        self.app.add_handler(CommandHandler('mytotal', mytotal_command))
 
-        # Add callback query handlers
+        # Add callback query handlers (these run after stale handler validation)
         self.app.add_handler(create_group_callback_handler())
         self.app.add_handler(create_expense_view_callback_handler())
+        self.app.add_handler(create_balance_callback_handler())
 
         # Add error handler
         self.app.add_error_handler(self.error_handler)

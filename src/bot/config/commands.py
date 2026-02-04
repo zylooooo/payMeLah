@@ -14,14 +14,19 @@ PRIVATE_COMMANDS = [
     BotCommand(command="update", description="Update your profile information"),
     BotCommand(command="groups", description="View and manage all of your expense groups"),
     BotCommand(command="addexpense", description="Add a new expense to an existing expense group"),
-    BotCommand(command="expenses", description="View expenses in your groups")
+    BotCommand(command="expenses", description="View expenses in your groups"),
+    BotCommand(command="balances", description="View all balances in a group"),
+    BotCommand(command="mybalance", description="View your balance in a group"),
+    BotCommand(command="mytotal", description="View your total balances across all groups")
 ]
 
 GROUP_COMMANDS = [
     BotCommand(command="newgroup", description="Create a new expense group"),
     BotCommand(command="groups", description="View and manage all of the expense groups in this chat"),
     BotCommand(command="addexpense", description="Add a new expense to an existing expense group"),
-    BotCommand(command="expenses", description="View expenses in this group")
+    BotCommand(command="expenses", description="View expenses in this group"),
+    BotCommand(command="balances", description="View all balances in a group"),
+    BotCommand(command="mybalance", description="View your balance in this group")
 ]
 
 async def setup_commands(bot: Bot) -> None:

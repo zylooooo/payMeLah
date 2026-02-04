@@ -3,6 +3,13 @@ from .profile_handler import profile_command
 from .join_handler import handle_join_group
 from .group_handler import groups_command, handle_group_callback, create_group_callback_handler
 from .expense_handler import expenses_command, handle_expense_view_callback, create_expense_view_callback_handler
+from .balance_handler import (
+    balances_command,
+    mybalance_command,
+    mytotal_command,
+    handle_balance_callback,
+    create_balance_callback_handler
+)
 
 __all__ = [
     "start_command",
@@ -13,5 +20,10 @@ __all__ = [
     "create_group_callback_handler",
     "expenses_command",
     "handle_expense_view_callback",
-    "create_expense_view_callback_handler"
+    "create_expense_view_callback_handler",
+    "balances_command",
+    "mybalance_command",
+    "mytotal_command",
+    "handle_balance_callback",
+    "create_balance_callback_handler"
 ]
