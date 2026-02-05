@@ -449,11 +449,11 @@ async def _show_expense_details(
 async def handle_expense_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries for expense viewing (selection, pagination, details)."""
     query = update.callback_query
-    await query.answer()
     
     telegram_user = update.effective_user
     if not telegram_user:
         logger.warning("Received expense callback query without telegram user information")
+        await query.answer("Session expired. Please try again.", show_alert=True)
         return
     
     # Determine chat context
@@ -462,11 +462,33 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
     
     action, data = ExpenseKeyboard.extract_callback_info(query.data)
     
-    # Handle cancel
+    # Cancel is always safe - answer and close
     if action == ExpenseKeyboard.ACTION_CANCEL:
+        await query.answer()
         await query.edit_message_text("Expense viewing cancelled.")
         _cleanup_expense_view_data(context, is_group_chat)
         return
+    
+    # For pagination on group selection (no colon in data), validate context exists
+    if action in [ExpenseKeyboard.ACTION_PREV, ExpenseKeyboard.ACTION_NEXT]:
+        if data and ':' not in str(data):
+            # Group selection pagination - requires context
+            groups = context.chat_data.get('expense_view_groups', []) if is_group_chat else context.user_data.get('expense_view_groups', [])
+            if not groups:
+                await query.answer("This list has expired.", show_alert=True)
+                await query.edit_message_text("Session expired. Please use /expenses again.")
+                return
+    
+    # For back to list without data (back to group selection), validate context
+    if action == ExpenseKeyboard.ACTION_BACK_TO_LIST and not data:
+        groups = context.chat_data.get('expense_view_groups', []) if is_group_chat else context.user_data.get('expense_view_groups', [])
+        if not groups:
+            await query.answer("This list has expired.", show_alert=True)
+            await query.edit_message_text("Session expired. Please use /expenses again.")
+            return
+    
+    # Validation passed, acknowledge the callback
+    await query.answer()
     
     # Handle group selection (for viewing expenses)
     if action == ExpenseKeyboard.ACTION_SELECT:
@@ -632,7 +654,8 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                 )
             
             if not can_modify:
-                await query.answer(reason, show_alert=True)
+                # Show error in the message since query.answer() was already called
+                await query.edit_message_text(f"Cannot delete: {reason}")
                 return
             
             # Show delete confirmation

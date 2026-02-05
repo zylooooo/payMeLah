@@ -152,11 +152,11 @@ def _format_groups_list_message(
 async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from group keyboard (selection, pagination, etc.)"""
     query = update.callback_query
-    await query.answer()
 
     telegram_user = update.effective_user
     if not telegram_user:
         logger.warning("Received group callback query without telegram user information")
+        await query.answer("Session expired. Please try again.", show_alert=True)
         return
     
     # Determine chat context
@@ -165,9 +165,30 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     action, data = GroupKeyboard.extract_callback_info(query.data)
 
+    # Cancel is always safe - answer and close
     if action == GroupKeyboard.ACTION_CANCEL:
+        await query.answer()
         await query.edit_message_text("Cancelled.")
         return
+    
+    # For pagination, validate context data exists before answering
+    if action in [GroupKeyboard.ACTION_NEXT, GroupKeyboard.ACTION_PREV]:
+        groups = context.chat_data.get('chat_groups', []) if is_group_chat else context.user_data.get('user_groups', [])
+        if not groups:
+            await query.answer("This list has expired.", show_alert=True)
+            await query.edit_message_text("Session expired. Please use /groups again.")
+            return
+    
+    # For back to list in group chat, validate context exists
+    if action == GroupKeyboard.ACTION_BACK_TO_LIST and is_group_chat:
+        groups = context.chat_data.get('chat_groups', [])
+        if not groups:
+            await query.answer("This list has expired.", show_alert=True)
+            await query.edit_message_text("Session expired. Please use /groups again.")
+            return
+    
+    # Validation passed, acknowledge the callback
+    await query.answer()
     
     # Back to groups list
     if action == GroupKeyboard.ACTION_BACK_TO_LIST:
@@ -191,16 +212,12 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     if action in [GroupKeyboard.ACTION_NEXT, GroupKeyboard.ACTION_PREV]:
-        # Handle pagination
+        # Handle pagination - context already validated above
         try:
             page = int(data) if data else 0
             
             if is_group_chat:
                 groups = context.chat_data.get('chat_groups', [])
-                if not groups:
-                    await query.edit_message_text("Groups list expired. Please use /groups again.")
-                    return
-                
                 message = _format_groups_list_message(
                     groups,
                     page=page,
@@ -210,10 +227,6 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 context.chat_data['chat_groups_page'] = page
             else:
                 groups = context.user_data.get('user_groups', [])
-                if not groups:
-                    await query.edit_message_text("Groups list expired. Please use /groups again.")
-                    return
-                
                 message = _format_groups_list_message(groups, page=page)
                 context.user_data['groups_page'] = page
             

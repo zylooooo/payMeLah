@@ -530,11 +530,11 @@ def _format_total_balances_message(total_balances: dict) -> str:
 async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from balance keyboards."""
     query = update.callback_query
-    await query.answer()
 
     telegram_user = update.effective_user
     if not telegram_user:
         logger.warning("Received balance callback without telegram user")
+        await query.answer("Session expired. Please try again.", show_alert=True)
         return
 
     chat_type = update.effective_chat.type if update.effective_chat else "private"
@@ -542,9 +542,34 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
 
     action, data = BalanceKeyboard.extract_callback_info(query.data)
 
+    # Cancel is always safe - answer and close
     if action == BalanceKeyboard.ACTION_CANCEL:
+        await query.answer()
         await query.edit_message_text("Closed.")
         return
+
+    # Settle up feature not yet implemented
+    if action == BalanceKeyboard.ACTION_SETTLE_UP:
+        await query.answer("Settlement feature coming soon!", show_alert=True)
+        return
+
+    # For pagination, validate context data exists before answering
+    if action in [BalanceKeyboard.ACTION_NEXT, BalanceKeyboard.ACTION_PREV]:
+        groups = context.user_data.get('balance_groups') if is_private else context.chat_data.get('balance_groups')
+        if not groups:
+            await query.answer("This list has expired.", show_alert=True)
+            await query.edit_message_text("Session expired. Please use the command again.")
+            return
+
+    # For back to list, validate context or prepare to re-fetch
+    if action == BalanceKeyboard.ACTION_BACK_TO_LIST:
+        groups = context.user_data.get('balance_groups') if is_private else context.chat_data.get('balance_groups')
+        if not groups:
+            # Will be re-fetched in _handle_back_to_list, just log for now
+            logger.debug(f"Balance groups not in context for user {telegram_user.id}, will re-fetch")
+
+    # Validation passed, acknowledge the callback
+    await query.answer()
 
     if action == BalanceKeyboard.ACTION_SELECT_GROUP:
         await _handle_group_selection(query, context, data, telegram_user.id)
@@ -560,11 +585,6 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if action == BalanceKeyboard.ACTION_BACK_TO_LIST:
         await _handle_back_to_list(query, context, telegram_user.id, is_private)
-        return
-
-    if action == BalanceKeyboard.ACTION_SETTLE_UP:
-        # This will be implemented in Phase 3
-        await query.answer("Settlement feature coming soon!", show_alert=True)
         return
 
 
