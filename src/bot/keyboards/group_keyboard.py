@@ -18,6 +18,7 @@ class GroupKeyboard:
     ACTION_LEAVE = "leave"
     ACTION_BACK = "back"
     ACTION_BACK_TO_LIST = "back_list"
+    ACTION_TOGGLE_SIMPLIFY = "toggle_simplify"
     ACTION_NEXT = "next"
     ACTION_PREV = "prev"
     ACTION_SKIP = "skip"
@@ -62,11 +63,23 @@ class GroupKeyboard:
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
-    def get_group_actions_keyboard(cls, group_id: int, user_role: Optional[GroupMemberRole] = None) -> InlineKeyboardMarkup:
-        """Generate keyboard for group actions based on user's role in the group."""
+    def get_group_actions_keyboard(
+        cls,
+        group_id: int,
+        user_role: Optional[GroupMemberRole] = None,
+        simplify_debts: bool = True
+    ) -> InlineKeyboardMarkup:
+        """
+        Generate keyboard for group actions based on user's role.
+
+        Args:
+            group_id: The group ID.
+            user_role: The requesting user's role in this group.
+            simplify_debts: Current group simplify_debts setting (shown on toggle button).
+        """
         buttons = []
 
-        # View members (all can view)
+        # View members (all roles)
         buttons.append([
             InlineKeyboardButton(
                 "View Members",
@@ -74,7 +87,7 @@ class GroupKeyboard:
             )
         ])
 
-        # Owner and admin actions - Remove Member
+        # Admin/owner: remove member + debt simplification toggle
         if user_role in [GroupMemberRole.OWNER, GroupMemberRole.ADMIN]:
             buttons.append([
                 InlineKeyboardButton(
@@ -82,8 +95,16 @@ class GroupKeyboard:
                     callback_data=cls._build_callback_data(cls.ACTION_REMOVE_MEMBER, str(group_id))
                 )
             ])
-        
-        # Owner only actions - Delete Group
+            # Toggle group-wide default for debt simplification
+            simplify_label = "Group Default: Simplified ✓" if simplify_debts else "Group Default: Raw Debts"
+            buttons.append([
+                InlineKeyboardButton(
+                    simplify_label,
+                    callback_data=cls._build_callback_data(cls.ACTION_TOGGLE_SIMPLIFY, str(group_id))
+                )
+            ])
+
+        # Owner only: delete group
         if user_role == GroupMemberRole.OWNER:
             buttons.append([
                 InlineKeyboardButton(
@@ -91,8 +112,8 @@ class GroupKeyboard:
                     callback_data=cls._build_callback_data(cls.ACTION_DELETE, str(group_id))
                 )
             ])
-        
-        # Leave group (not owner)
+
+        # Non-owner: leave group
         if user_role != GroupMemberRole.OWNER:
             buttons.append([
                 InlineKeyboardButton(
@@ -100,13 +121,12 @@ class GroupKeyboard:
                     callback_data=cls._build_callback_data(cls.ACTION_LEAVE, str(group_id))
                 )
             ])
-        
-        # Back and Cancel buttons
+
         buttons.append([
             InlineKeyboardButton("<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST)),
             InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
         ])
-    
+
         return InlineKeyboardMarkup(buttons)
     
     @classmethod

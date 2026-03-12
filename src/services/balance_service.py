@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_
 from models import Expense, ExpenseParticipant, Payment, Group
 from shared import (
     GroupNotFoundException,
@@ -7,7 +7,7 @@ from shared import (
 )
 from .group_service import GroupService
 from .user_service import UserService
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from decimal import Decimal
 from collections import defaultdict
 import logging
@@ -26,92 +26,71 @@ class BalanceService:
     async def get_group_balances(
         db: AsyncSession,
         group_id: int,
-        requesting_user_id: int
+        requesting_user_id: int,
+        simplify: bool = True
     ) -> Dict[str, any]:
         """
         Calculate all balances within a group.
-        Returns who owes whom and the net balance for each member.
 
         Args:
-            db: AsyncSession - The database session.
-            group_id: int - The group ID.
-            requesting_user_id: int - The user requesting (must be a member).
+            db: Database session.
+            group_id: The group ID.
+            requesting_user_id: Must be a member of the group.
+            simplify: If True, apply min-transactions simplification to debts.
 
         Returns:
-            Dict containing:
-                - 'group': Group information
-                - 'members': List of member balances
-                - 'debts': List of individual debts (who owes whom)
-                - 'currency': The group's default currency
+            Dict with keys: group, members, debts, currency.
+            members: sorted list of {user_id, username, first_name, last_name, balance}.
+            debts: list of {from_user_id, to_user_id, amount} — simplified or raw.
 
         Raises:
-            GroupNotFoundException - If group doesn't exist.
-            UnauthorizedActionException - If user is not a member.
+            GroupNotFoundException, UnauthorizedActionException.
         """
-        logger.info(f"Calculating group balances for group {group_id}")
+        logger.info(f"Calculating group balances for group {group_id} (simplify={simplify})")
 
-        # Verify group exists
         group = await GroupService.get_group_by_id(db, group_id)
         if not group:
-            raise GroupNotFoundException(f"Group with ID {group_id} not found")
+            raise GroupNotFoundException(f"Group {group_id} not found")
 
-        # Verify user is a member
         if not await GroupService.is_member(db, group_id, requesting_user_id):
             raise UnauthorizedActionException(
                 f"User {requesting_user_id} is not a member of group {group_id}"
             )
 
-        # Get all group members with details
         members = await GroupService.get_group_members_with_details(db, group_id)
         member_ids = [m['user_id'] for m in members]
 
-        # Calculate balances from expenses
-        expense_debts = await BalanceService._calculate_expense_debts(
-            db, group_id, member_ids
-        )
+        # Calculate raw net debts (expense debts minus payments already made)
+        expense_debts = await BalanceService._calculate_expense_debts(db, group_id, member_ids)
+        payment_credits = await BalanceService._calculate_payment_credits(db, group_id, member_ids)
+        net_debts = BalanceService._combine_debts_and_payments(expense_debts, payment_credits)
 
-        # Get payments/settlements and adjust debts
-        payment_credits = await BalanceService._calculate_payment_credits(
-            db, group_id, member_ids
-        )
+        # Produce the debt list — simplified or raw
+        if simplify:
+            debts_list = BalanceService._simplify_debts(net_debts, member_ids)
+        else:
+            debts_list = [
+                {'from_user_id': from_id, 'to_user_id': to_id, 'amount': amount}
+                for (from_id, to_id), amount in net_debts.items()
+                if amount > 0
+            ]
 
-        # Combine expense debts and payment credits to get net debts
-        net_debts = BalanceService._combine_debts_and_payments(
-            expense_debts, payment_credits
-        )
+        # Net balance per member (positive = owed money, negative = owes money)
+        member_balances = BalanceService._calculate_member_balances(net_debts, member_ids)
 
-        # Calculate net balance for each member
-        member_balances = BalanceService._calculate_member_balances(
-            net_debts, member_ids
-        )
-
-        # Build member balance list with user details
         members_with_balances = []
         for member in members:
-            user_id = member['user_id']
-            balance = member_balances.get(user_id, Decimal('0'))
+            uid = member['user_id']
             members_with_balances.append({
-                'user_id': user_id,
+                'user_id': uid,
                 'username': member.get('username'),
                 'first_name': member.get('first_name'),
                 'last_name': member.get('last_name'),
-                'balance': balance  # Positive = owed money, Negative = owes money
+                'balance': member_balances.get(uid, Decimal('0'))
             })
-
-        # Sort by balance (most owed first, then most owing)
         members_with_balances.sort(key=lambda x: x['balance'], reverse=True)
 
-        # Format debts list for display
-        debts_list = []
-        for (from_user_id, to_user_id), amount in net_debts.items():
-            if amount > 0:
-                debts_list.append({
-                    'from_user_id': from_user_id,
-                    'to_user_id': to_user_id,
-                    'amount': amount
-                })
-
-        logger.info(f"Successfully calculated balances for group {group_id}")
+        logger.info(f"Calculated balances for group {group_id}: {len(debts_list)} debt(s)")
         return {
             'group': group,
             'members': members_with_balances,
@@ -123,51 +102,38 @@ class BalanceService:
     async def get_user_balance_in_group(
         db: AsyncSession,
         group_id: int,
-        user_id: int
+        user_id: int,
+        simplify: bool = True
     ) -> Dict[str, any]:
         """
         Get a specific user's balance details in a group.
 
         Args:
-            db: AsyncSession - The database session.
-            group_id: int - The group ID.
-            user_id: int - The user ID.
+            db: Database session.
+            group_id: The group ID.
+            user_id: The user ID.
+            simplify: Whether to apply debt simplification.
 
         Returns:
-            Dict containing:
-                - 'group': Group information
-                - 'net_balance': Net balance (positive = owed, negative = owes)
-                - 'owes_to': List of users this user owes money to
-                - 'owed_by': List of users who owe this user money
-                - 'currency': The group's default currency
+            Dict with keys: group, net_balance, owes_to, owed_by, currency.
 
         Raises:
-            GroupNotFoundException - If group doesn't exist.
-            UnauthorizedActionException - If user is not a member.
+            GroupNotFoundException, UnauthorizedActionException.
         """
-        logger.info(f"Getting balance for user {user_id} in group {group_id}")
+        logger.info(f"Getting balance for user {user_id} in group {group_id} (simplify={simplify})")
 
-        # Get full group balances
         group_balances = await BalanceService.get_group_balances(
-            db, group_id, user_id
+            db, group_id, user_id, simplify=simplify
         )
 
-        # Find this user's balance
-        user_balance = None
-        for member in group_balances['members']:
-            if member['user_id'] == user_id:
-                user_balance = member
-                break
+        user_balance = next(
+            (m for m in group_balances['members'] if m['user_id'] == user_id),
+            None
+        )
+        members_lookup = {m['user_id']: m for m in group_balances['members']}
 
-        # Get members lookup for names
-        members_lookup = {
-            m['user_id']: m for m in group_balances['members']
-        }
-
-        # Calculate what user owes and is owed
         owes_to = []
         owed_by = []
-
         for debt in group_balances['debts']:
             if debt['from_user_id'] == user_id:
                 to_user = members_lookup.get(debt['to_user_id'], {})
@@ -203,28 +169,16 @@ class BalanceService:
     ) -> Dict[str, any]:
         """
         Get a user's total balances across all groups.
-
-        Args:
-            db: AsyncSession - The database session.
-            user_id: int - The user ID.
+        Always uses simplified debts (summary view).
 
         Returns:
-            Dict containing:
-                - 'groups': List of group balances
-                - 'total_owed': Total amount owed to user (by currency)
-                - 'total_owes': Total amount user owes (by currency)
+            Dict with keys: groups, total_owed (by currency), total_owes (by currency).
         """
         logger.info(f"Getting total balances for user {user_id}")
 
-        # Get all groups user is a member of
         groups = await GroupService.get_all_groups_by_user_id(db, user_id)
-
         if not groups:
-            return {
-                'groups': [],
-                'total_owed': {},
-                'total_owes': {}
-            }
+            return {'groups': [], 'total_owed': {}, 'total_owes': {}}
 
         group_balances = []
         total_owed_by_currency = defaultdict(Decimal)
@@ -233,7 +187,7 @@ class BalanceService:
         for group in groups:
             try:
                 balance = await BalanceService.get_user_balance_in_group(
-                    db, group['id'], user_id
+                    db, group['id'], user_id, simplify=True
                 )
                 currency = balance['currency']
                 net = balance['net_balance']
@@ -247,22 +201,81 @@ class BalanceService:
                     'owed_by': balance['owed_by']
                 })
 
-                # Aggregate totals by currency
                 if net > 0:
                     total_owed_by_currency[currency] += net
                 elif net < 0:
                     total_owes_by_currency[currency] += abs(net)
-
             except Exception as e:
                 logger.warning(f"Error getting balance for group {group['id']}: {e}")
                 continue
 
-        logger.info(f"Successfully calculated total balances for user {user_id}")
+        logger.info(f"Calculated total balances for user {user_id}")
         return {
             'groups': group_balances,
             'total_owed': dict(total_owed_by_currency),
             'total_owes': dict(total_owes_by_currency)
         }
+
+    @staticmethod
+    def _simplify_debts(
+        net_debts: Dict[Tuple[int, int], Decimal],
+        member_ids: List[int]
+    ) -> List[Dict]:
+        """
+        Reduce the number of transactions needed to settle all debts using
+        the greedy min-transactions algorithm.
+
+        Algorithm:
+        1. Compute net balance per person from the raw debt pairs.
+        2. Repeatedly match the biggest debtor with the biggest creditor.
+        3. Transfer min(|debtor_balance|, creditor_balance) between them.
+        4. Continue until all balances reach zero.
+
+        This produces the minimum number of transactions to clear all debts.
+
+        Args:
+            net_debts: Consolidated pairwise debts {(from_id, to_id): amount}.
+            member_ids: All member IDs in the group.
+
+        Returns:
+            List of {from_user_id, to_user_id, amount} dicts.
+        """
+        # Build net balance per person (positive = owed, negative = owes)
+        balances: Dict[int, Decimal] = defaultdict(Decimal)
+        for (from_user, to_user), amount in net_debts.items():
+            balances[from_user] -= amount
+            balances[to_user] += amount
+
+        # Work only with non-zero balances (threshold to handle floating-point noise)
+        EPSILON = Decimal('0.005')
+        non_zero = {uid: bal for uid, bal in balances.items() if abs(bal) > EPSILON}
+
+        simplified = []
+        while len(non_zero) >= 2:
+            debtor = min(non_zero, key=lambda x: non_zero[x])    # most negative
+            creditor = max(non_zero, key=lambda x: non_zero[x])  # most positive
+
+            # Both sides must be non-trivially non-zero
+            if non_zero[creditor] <= EPSILON or abs(non_zero[debtor]) <= EPSILON:
+                break
+
+            transfer = min(abs(non_zero[debtor]), non_zero[creditor])
+            transfer = transfer.quantize(Decimal('0.01'))
+
+            if transfer > 0:
+                simplified.append({
+                    'from_user_id': debtor,
+                    'to_user_id': creditor,
+                    'amount': transfer
+                })
+
+            non_zero[debtor] += transfer
+            non_zero[creditor] -= transfer
+
+            # Remove settled balances
+            non_zero = {uid: bal for uid, bal in non_zero.items() if abs(bal) > EPSILON}
+
+        return simplified
 
     @staticmethod
     async def _calculate_expense_debts(
@@ -274,12 +287,10 @@ class BalanceService:
         Calculate debts from unsettled expense participations.
 
         Returns:
-            Dict mapping (from_user_id, to_user_id) -> amount
-            where from_user owes to_user the amount
+            {(debtor_id, creditor_id): amount} — debtor owes creditor this amount.
         """
-        debts = defaultdict(Decimal)
+        debts: Dict[Tuple[int, int], Decimal] = defaultdict(Decimal)
 
-        # Get all unsettled expense participations in the group
         result = await db.execute(
             select(ExpenseParticipant, Expense.payer_id)
             .join(Expense, ExpenseParticipant.expense_id == Expense.id)
@@ -287,19 +298,12 @@ class BalanceService:
                 and_(
                     Expense.group_id == group_id,
                     ExpenseParticipant.is_settled == False,
-                    ExpenseParticipant.user_id != Expense.payer_id  # Don't include payer's self-share
+                    ExpenseParticipant.user_id != Expense.payer_id
                 )
             )
         )
-        participations = result.all()
-
-        for participation, payer_id in participations:
-            # participant owes payer
-            debtor = participation.user_id
-            creditor = payer_id
-            amount = Decimal(str(participation.share_amount))
-
-            debts[(debtor, creditor)] += amount
+        for participation, payer_id in result.all():
+            debts[(participation.user_id, payer_id)] += Decimal(str(participation.share_amount))
 
         return debts
 
@@ -310,24 +314,18 @@ class BalanceService:
         member_ids: List[int]
     ) -> Dict[Tuple[int, int], Decimal]:
         """
-        Calculate credits from payments/settlements.
+        Calculate credits from recorded payments/settlements.
 
         Returns:
-            Dict mapping (from_user_id, to_user_id) -> amount
-            representing payments made (reduces debt)
+            {(from_user_id, to_user_id): amount} — payments already made.
         """
-        credits = defaultdict(Decimal)
+        credits: Dict[Tuple[int, int], Decimal] = defaultdict(Decimal)
 
-        # Get all payments in the group
         result = await db.execute(
-            select(Payment)
-            .where(Payment.group_id == group_id)
+            select(Payment).where(Payment.group_id == group_id)
         )
-        payments = result.scalars().all()
-
-        for payment in payments:
+        for payment in result.scalars().all():
             if payment.from_user_id and payment.to_user_id:
-                # Payment from from_user to to_user reduces debt
                 credits[(payment.from_user_id, payment.to_user_id)] += Decimal(str(payment.amount))
 
         return credits
@@ -338,37 +336,27 @@ class BalanceService:
         payments: Dict[Tuple[int, int], Decimal]
     ) -> Dict[Tuple[int, int], Decimal]:
         """
-        Combine expense debts and payment credits to get net debts.
-        Also consolidates bidirectional debts (A owes B and B owes A).
+        Combine expense debts and payment credits into net pairwise debts.
+        Also consolidates bidirectional debts (A owes B and B owes A → one net debt).
         """
-        # Start with expense debts
-        net = defaultdict(Decimal)
+        net: Dict[Tuple[int, int], Decimal] = defaultdict(Decimal)
         for key, amount in debts.items():
             net[key] += amount
-
-        # Subtract payments
         for key, amount in payments.items():
             net[key] -= amount
 
         # Consolidate bidirectional debts
         consolidated = {}
         processed = set()
-
         for (from_user, to_user), amount in net.items():
             if (from_user, to_user) in processed:
                 continue
-
-            reverse_amount = net.get((to_user, from_user), Decimal('0'))
-
-            # Calculate net debt
-            net_amount = amount - reverse_amount
-
+            reverse = net.get((to_user, from_user), Decimal('0'))
+            net_amount = amount - reverse
             if net_amount > 0:
                 consolidated[(from_user, to_user)] = net_amount
             elif net_amount < 0:
                 consolidated[(to_user, from_user)] = abs(net_amount)
-            # If net_amount == 0, no debt exists
-
             processed.add((from_user, to_user))
             processed.add((to_user, from_user))
 
@@ -380,50 +368,13 @@ class BalanceService:
         member_ids: List[int]
     ) -> Dict[int, Decimal]:
         """
-        Calculate net balance for each member.
-        Positive = they are owed money
-        Negative = they owe money
+        Compute net balance per member.
+        Positive = they are owed money. Negative = they owe money.
         """
         balances = {uid: Decimal('0') for uid in member_ids}
-
         for (from_user, to_user), amount in debts.items():
-            # from_user owes, so their balance decreases
             if from_user in balances:
                 balances[from_user] -= amount
-            # to_user is owed, so their balance increases
             if to_user in balances:
                 balances[to_user] += amount
-
         return balances
-
-    @staticmethod
-    async def get_simplified_debts(
-        db: AsyncSession,
-        group_id: int,
-        requesting_user_id: int
-    ) -> List[Dict]:
-        """
-        Get simplified debts for a group (debt simplification).
-        Minimizes the number of transactions needed to settle all debts.
-
-        This will be fully implemented in Phase 4.
-        For now, returns the raw debts.
-
-        Args:
-            db: AsyncSession - The database session.
-            group_id: int - The group ID.
-            requesting_user_id: int - The user requesting.
-
-        Returns:
-            List of simplified debt transactions.
-        """
-        logger.info(f"Getting simplified debts for group {group_id}")
-
-        # Get group balances
-        group_balances = await BalanceService.get_group_balances(
-            db, group_id, requesting_user_id
-        )
-
-        # For now, return the raw debts
-        # Phase 4 will implement the simplification algorithm
-        return group_balances['debts']

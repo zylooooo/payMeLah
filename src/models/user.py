@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, DateTime
+from sqlalchemy import Column, BigInteger, String, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, timedelta
 from infrastructure import Base
@@ -19,6 +19,7 @@ class User(Base):
     preferred_currency = Column(String(3), nullable=False, default='SGD', comment='User\'s preferred currency')
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='User\'s creation timestamp')
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='User\'s last update timestamp')
+    simplify_debts = Column(Boolean, default=True, nullable=False, comment='Whether the user prefers to see simplified debts by default')
 
     # Relationships
     groups = relationship('GroupMember', back_populates='user', cascade='all, delete-orphan')
@@ -35,5 +36,6 @@ class User(Base):
             'last_name': self.last_name,
             'preferred_currency': self.preferred_currency,
             'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat()
+            'updated_at': self.updated_at.isoformat(),
+            'simplify_debts': self.simplify_debts
         }

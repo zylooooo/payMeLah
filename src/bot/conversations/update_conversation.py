@@ -23,12 +23,15 @@ logger = logging.getLogger(__name__)
 ERROR_MSG = "An unexpected error has occurred while updating your profile. Please try again later."
 CONVERSATION_TIMEOUT = 600  # 10 minutes
 
-# Field configuration - defines order, labels, validators, and states
+# Field configuration — defines order, labels, types, validators, and states.
+# Text fields use 'validator' and 'transform'.
+# Boolean fields use 'input_type': 'boolean' and show a button selection instead of text input.
 FIELD_CONFIG = [
     {
         'name': UpdateKeyboard.FIELD_FIRST_NAME,
         'label': 'First Name',
         'state': UpdateProfileStates.FIRST_NAME,
+        'input_type': 'text',
         'validator': validate_name,
         'transform': None,
     },
@@ -36,6 +39,7 @@ FIELD_CONFIG = [
         'name': UpdateKeyboard.FIELD_LAST_NAME,
         'label': 'Last Name',
         'state': UpdateProfileStates.LAST_NAME,
+        'input_type': 'text',
         'validator': validate_name,
         'transform': None,
     },
@@ -43,8 +47,17 @@ FIELD_CONFIG = [
         'name': UpdateKeyboard.FIELD_PREFERRED_CURRENCY,
         'label': 'Preferred Currency',
         'state': UpdateProfileStates.PREFERRED_CURRENCY,
+        'input_type': 'text',
         'validator': validate_currency_code,
         'transform': str.upper,
+    },
+    {
+        'name': UpdateKeyboard.FIELD_SIMPLIFY_DEBTS,
+        'label': 'Debt View Preference',
+        'state': UpdateProfileStates.SIMPLIFY_DEBTS,
+        'input_type': 'boolean',
+        'validator': None,
+        'transform': None,
     },
 ]
 
@@ -75,6 +88,18 @@ def _get_prev_field(current_name: str) -> Optional[Dict]:
 
 def _format_field_prompt(field_name: str, current_value: Any, field_label: str) -> str:
     """Format the prompt message for a field."""
+    if field_name == UpdateKeyboard.FIELD_SIMPLIFY_DEBTS:
+        # Boolean field — current value is True/False
+        current_display = "Simplified Debts" if current_value else "Raw Debts"
+        return (
+            f"<b>{field_label}</b>\n\n"
+            f"Current value: <code>{current_display}</code>\n\n"
+            "Choose your preferred debt view:\n"
+            "  • <b>Simplified Debts</b> — minimises the number of transactions to settle all debts\n"
+            "  • <b>Raw Debts</b> — shows every individual debt pair as recorded\n\n"
+            "This is your personal default. Groups can override it with their own setting."
+        )
+
     current_display = current_value if current_value else "Not Set"
 
     if field_name == UpdateKeyboard.FIELD_PREFERRED_CURRENCY:
@@ -85,7 +110,7 @@ def _format_field_prompt(field_name: str, current_value: Any, field_label: str) 
             "Please enter a 3-letter currency code (e.g., SGD, MYR, USD) or use 'Skip' to keep the current value.\n"
             "Note that this value will be the default currency that your expenses will be displayed in."
         )
-    
+
     return (
         f"<b>{field_label}</b>\n\n"
         f"Current value: <code>{current_display}</code>\n\n"
@@ -94,26 +119,33 @@ def _format_field_prompt(field_name: str, current_value: Any, field_label: str) 
     )
 
 
+def _bool_display(value) -> str:
+    """Format a boolean simplify_debts value for display."""
+    return "Simplified Debts" if value else "Raw Debts"
+
+
 def _format_summary(update_data: Dict[str, Any], original_user: Dict[str, Any]) -> str:
     """Format the summary of changes."""
     changes = []
     unchanged = []
-    
-    field_labels = {
-        UpdateKeyboard.FIELD_FIRST_NAME: 'First Name',
-        UpdateKeyboard.FIELD_LAST_NAME: 'Last Name',
-        UpdateKeyboard.FIELD_PREFERRED_CURRENCY: 'Preferred Currency',
-    }
-    
-    for field_name, label in field_labels.items():
+
+    for field in FIELD_CONFIG:
+        field_name = field['name']
+        label = field['label']
         new_value = update_data.get(field_name)
-        old_value = original_user.get(field_name) or (
-            'SGD' if field_name == UpdateKeyboard.FIELD_PREFERRED_CURRENCY else None
-        )
-        old_display = old_value or 'Not set'
-        
-        if new_value is not None and new_value != old_value:
-            changes.append(f"<b>{label}:</b> <code>{old_display}</code> → <code>{new_value}</code>")
+        old_value = original_user.get(field_name)
+
+        # Determine display strings based on field type
+        if field['input_type'] == 'boolean':
+            old_display = _bool_display(old_value if old_value is not None else True)
+            new_display = _bool_display(new_value) if new_value is not None else None
+        else:
+            old_value = old_value or ('SGD' if field_name == UpdateKeyboard.FIELD_PREFERRED_CURRENCY else None)
+            old_display = old_value or 'Not set'
+            new_display = new_value
+
+        if new_display is not None and new_display != old_display:
+            changes.append(f"<b>{label}:</b> <code>{old_display}</code> → <code>{new_display}</code>")
         else:
             unchanged.append(f"<b>{label}:</b> <code>{old_display}</code>")
     
@@ -201,15 +233,20 @@ async def _show_field_prompt(
     """Show prompt for a field and return its state."""
     field_config = _FIELD_BY_NAME[field_name]
     original_user = context.user_data['original_user']
-    
+    is_first = (field_name == FIELD_CONFIG[0]['name'])
+
     message = _format_field_prompt(
         field_name,
         original_user.get(field_name),
         field_config['label']
     )
-    is_first = (field_name == FIELD_CONFIG[0]['name'])
-    keyboard = UpdateKeyboard.get_navigation_keyboard(field_name, is_first=is_first)
-    
+
+    # Boolean fields use a button-selection keyboard; text fields use the standard nav keyboard
+    if field_config['input_type'] == 'boolean':
+        keyboard = UpdateKeyboard.get_boolean_field_keyboard(field_name, is_first=is_first)
+    else:
+        keyboard = UpdateKeyboard.get_navigation_keyboard(field_name, is_first=is_first)
+
     await _send_or_edit_message(update, context, message, keyboard)
     return field_config['state']
 
@@ -373,6 +410,43 @@ async def handle_preferred_currency(update: Update, context: ContextTypes.DEFAUL
     return await handle_field_input(update, context, UpdateKeyboard.FIELD_PREFERRED_CURRENCY)
 
 
+async def handle_simplify_debts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Handle the debt view preference step.
+    This is a boolean field — no text input, only button callbacks:
+      - ACTION_SELECT with field 'simplify_debts:true' or 'simplify_debts:false'
+      - ACTION_SKIP, ACTION_BACK, ACTION_CANCEL (standard nav)
+    """
+    query = update.callback_query
+    await query.answer()
+
+    if not context.user_data.get('conversation_active'):
+        await query.edit_message_text(
+            "This conversation has expired. Please start a new conversation using the /update command."
+        )
+        _cleanup_conversation(context)
+        return ConversationHandler.END
+
+    action, field = UpdateKeyboard.extract_callback_info(query.data)
+
+    if action == UpdateKeyboard.ACTION_CANCEL:
+        return await cancel_update(update, context)
+
+    if action == UpdateKeyboard.ACTION_BACK:
+        return await _navigate_to_prev(update, context, UpdateKeyboard.FIELD_SIMPLIFY_DEBTS)
+
+    if action == UpdateKeyboard.ACTION_SKIP:
+        return await _navigate_to_next(update, context, UpdateKeyboard.FIELD_SIMPLIFY_DEBTS)
+
+    if action == UpdateKeyboard.ACTION_SELECT and field and field.startswith(UpdateKeyboard.FIELD_SIMPLIFY_DEBTS):
+        # field is 'simplify_debts:true' or 'simplify_debts:false'
+        value_str = field.split(':', 1)[1] if ':' in field else 'true'
+        context.user_data['update_data'][UpdateKeyboard.FIELD_SIMPLIFY_DEBTS] = (value_str == 'true')
+        return await _navigate_to_next(update, context, UpdateKeyboard.FIELD_SIMPLIFY_DEBTS)
+
+    return UpdateProfileStates.SIMPLIFY_DEBTS
+
+
 async def handle_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle summary screen callbacks (edit field, confirm, cancel)."""
     query = update.callback_query
@@ -429,11 +503,14 @@ async def confirm_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         async with get_db() as db:
             await UserService.update_user(db, telegram_user.id, filtered_data)
         
-        # Format success message
-        changes_list = [
-            f"  • {key.replace('_', ' ').title()}: <code>{value}</code>"
-            for key, value in filtered_data.items()
-        ]
+        # Format success message — display boolean fields with human-readable labels
+        changes_list = []
+        for key, value in filtered_data.items():
+            if key == UpdateKeyboard.FIELD_SIMPLIFY_DEBTS:
+                display_value = _bool_display(value)
+            else:
+                display_value = value
+            changes_list.append(f"  • {key.replace('_', ' ').title()}: <code>{display_value}</code>")
         success_msg = (
             "<b>Profile Updated Successfully!</b>\n\n"
             "The following fields have been updated:\n"
@@ -508,6 +585,17 @@ def create_update_conversation_handler() -> ConversationHandler:
                     pattern=f"^{UpdateKeyboard.PREFIX}{UpdateKeyboard.ACTION_CANCEL}$"
                 ),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_preferred_currency)
+            ],
+            UpdateProfileStates.SIMPLIFY_DEBTS: [
+                # Boolean field — only button callbacks, no text input
+                CallbackQueryHandler(
+                    handle_simplify_debts,
+                    pattern=f"^{UpdateKeyboard.PREFIX}({UpdateKeyboard.ACTION_SELECT}|{UpdateKeyboard.ACTION_SKIP}|{UpdateKeyboard.ACTION_BACK}):"
+                ),
+                CallbackQueryHandler(
+                    cancel_update,
+                    pattern=f"^{UpdateKeyboard.PREFIX}{UpdateKeyboard.ACTION_CANCEL}$"
+                )
             ],
             UpdateProfileStates.SUMMARY: [
                 CallbackQueryHandler(

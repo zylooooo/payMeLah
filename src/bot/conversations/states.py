@@ -5,6 +5,7 @@ class UpdateProfileStates(Enum):
     FIRST_NAME = auto()
     LAST_NAME = auto()
     PREFERRED_CURRENCY = auto()
+    SIMPLIFY_DEBTS = auto()
     SUMMARY = auto()
 
 class CreateGroupStates(Enum):

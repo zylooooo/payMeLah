@@ -487,4 +487,44 @@ class GroupService:
         groups_list = [group.to_dict() for group in groups]
         logger.info(f"Found {len(groups_list)} groups from Telegram chat ID: {chat_id}")
         return groups_list
-          
+
+    @staticmethod
+    async def update_simplify_setting(
+        db: AsyncSession,
+        group_id: int,
+        simplify_debts: bool,
+        requesting_user_id: int
+    ) -> dict:
+        """
+        Update a group's default debt simplification setting.
+        Only admins and owners may change this setting.
+
+        Args:
+            db: Database session.
+            group_id: The group ID.
+            simplify_debts: New value for the simplify_debts flag.
+            requesting_user_id: Must be an admin or owner of the group.
+
+        Returns:
+            Updated group dict.
+
+        Raises:
+            GroupNotFoundException, UnauthorizedActionException.
+        """
+        logger.info(f"Updating simplify_debts={simplify_debts} for group {group_id} by user {requesting_user_id}")
+
+        member_role = await GroupService.get_member_role(db, group_id, requesting_user_id)
+        if member_role not in [GroupMemberRole.ADMIN, GroupMemberRole.OWNER]:
+            raise UnauthorizedActionException("Only admins and owners can change group settings.")
+
+        result = await db.execute(select(Group).where(Group.id == group_id))
+        group = result.scalar_one_or_none()
+        if not group:
+            raise GroupNotFoundException(f"Group {group_id} not found")
+
+        group.simplify_debts = simplify_debts
+        group.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(group)
+        logger.info(f"Updated simplify_debts for group {group_id}")
+        return group.to_dict()

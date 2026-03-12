@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, BigInteger, ForeignKey, DateTime, Enum
+from sqlalchemy import Column, Integer, String, Text, BigInteger, ForeignKey, DateTime, Enum, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, timedelta
 from infrastructure import Base
@@ -29,6 +29,7 @@ class Group(Base):
     created_by = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='User who created the group')
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Group creation timestamp')
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='Group last update timestamp')
+    simplify_debts = Column(Boolean, default=True, nullable=False, comment='Whether to show simplified debts by default for this group')
 
     # Relationships
     members = relationship('GroupMember', back_populates='group', cascade='all, delete-orphan')
@@ -44,7 +45,8 @@ class Group(Base):
             'telegram_chat_id': self.telegram_chat_id,
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat()
+            'updated_at': self.updated_at.isoformat(),
+            'simplify_debts': self.simplify_debts
         }
 
 class GroupMember(Base):

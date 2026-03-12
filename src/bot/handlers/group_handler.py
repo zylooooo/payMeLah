@@ -294,6 +294,19 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(ERROR_MSG)
         return
 
+    # Toggle group debt simplification default (admin/owner only)
+    if action == GroupKeyboard.ACTION_TOGGLE_SIMPLIFY:
+        try:
+            group_id = int(data) if data else None
+            if not group_id:
+                await query.edit_message_text("Invalid group.")
+                return
+            await _handle_toggle_simplify(query, context, group_id, telegram_user.id)
+        except Exception as e:
+            logger.error(f"Error toggling simplify setting: {e}", exc_info=True)
+            await query.edit_message_text(ERROR_MSG)
+        return
+
     # Handle confirmations (delete, leave, remove)
     if action == GroupKeyboard.ACTION_CONFIRM:
         await _handle_confirmation(query, context, data, telegram_user.id)
@@ -350,7 +363,9 @@ async def _show_group_details(
                 # Get user's role in the group
                 member_role = await GroupService.get_member_role(db, group_id, user_id)
                 message = _format_group_details(group, members, member_role=member_role)
-                keyboard = GroupKeyboard.get_group_actions_keyboard(group_id, member_role)
+                keyboard = GroupKeyboard.get_group_actions_keyboard(
+                    group_id, member_role, simplify_debts=group.get('simplify_debts', True)
+                )
             
             await query.edit_message_text(
                 message,
@@ -378,13 +393,15 @@ def _format_group_details(
     """
     description = group.get('description') or "No description"
     
+    simplify_display = "Simplified ✓" if group.get('simplify_debts', True) else "Raw Debts"
     message = (
         f"<b>{group['name']}</b>\n\n"
         f"<b>Description:</b> {description}\n"
         f"<b>Default Currency:</b> {group['default_currency']}\n"
         f"<b>Members:</b> {len(members)}\n"
+        f"<b>Debt View Default:</b> {simplify_display}\n"
     )
-    
+
     # Show role if in private chat (member management context)
     if member_role is not None:
         role_display = member_role.value.title()
@@ -708,6 +725,44 @@ async def _execute_remove_member(query, context: ContextTypes.DEFAULT_TYPE, grou
         await query.edit_message_text(str(e))
     except GroupMemberNotFoundException as e:
         await query.edit_message_text(str(e))
+
+
+async def _handle_toggle_simplify(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    group_id: int,
+    user_id: int
+) -> None:
+    """
+    Toggle the group's default debt simplification setting.
+    Flips the current value and re-renders the group details view.
+    Only admins and owners can do this (enforced by GroupService).
+    """
+    try:
+        async with get_db() as db:
+            group = await GroupService.get_group_by_id(db, group_id)
+            if not group:
+                await query.edit_message_text("Group not found.")
+                return
+
+            new_value = not group.get('simplify_debts', True)
+            updated_group = await GroupService.update_simplify_setting(
+                db, group_id, new_value, user_id
+            )
+
+            # Re-render group details with the updated setting
+            members = await GroupService.get_group_members(db, group_id)
+            member_role = await GroupService.get_member_role(db, group_id, user_id)
+
+        message = _format_group_details(updated_group, members, member_role=member_role)
+        keyboard = GroupKeyboard.get_group_actions_keyboard(
+            group_id, member_role, simplify_debts=updated_group.get('simplify_debts', True)
+        )
+        await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
+    except UnauthorizedActionException:
+        await query.answer("Only admins and owners can change group settings.", show_alert=True)
+    except GroupNotFoundException:
+        await query.edit_message_text("Group not found.")
 
 
 def create_group_callback_handler() -> CallbackQueryHandler:

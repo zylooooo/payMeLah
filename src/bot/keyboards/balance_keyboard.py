@@ -14,6 +14,7 @@ class BalanceKeyboard:
     ACTION_REFRESH = "refresh"
     ACTION_BACK = "back"
     ACTION_BACK_TO_LIST = "back_list"
+    ACTION_TOGGLE_SIMPLIFY = "toggle_simplify"
     ACTION_CANCEL = "cancel"
     ACTION_NEXT = "next"
     ACTION_PREV = "prev"
@@ -92,7 +93,8 @@ class BalanceKeyboard:
     def get_group_balances_keyboard(
         cls,
         group_id: int,
-        has_debts: bool = True
+        has_debts: bool = True,
+        is_simplified: bool = True
     ) -> InlineKeyboardMarkup:
         """
         Generate keyboard for group balances view.
@@ -100,6 +102,7 @@ class BalanceKeyboard:
         Args:
             group_id: The group ID.
             has_debts: Whether there are outstanding debts to settle.
+            is_simplified: Whether the current view is showing simplified debts.
         """
         buttons = []
 
@@ -114,6 +117,18 @@ class BalanceKeyboard:
                     )
                 )
             ])
+
+        # Simplified/raw toggle
+        toggle_label = "View: Simplified ✓" if is_simplified else "View: Raw Debts"
+        buttons.append([
+            InlineKeyboardButton(
+                toggle_label,
+                callback_data=cls._build_callback_data(
+                    cls.ACTION_TOGGLE_SIMPLIFY,
+                    f"group:{group_id}"
+                )
+            )
+        ])
 
         # Refresh button
         buttons.append([
@@ -145,7 +160,8 @@ class BalanceKeyboard:
         cls,
         group_id: int,
         has_debts: bool = True,
-        owes_money: bool = False
+        owes_money: bool = False,
+        is_simplified: bool = True
     ) -> InlineKeyboardMarkup:
         """
         Generate keyboard for user's balance in a group.
@@ -154,6 +170,7 @@ class BalanceKeyboard:
             group_id: The group ID.
             has_debts: Whether the user has any debts/credits.
             owes_money: Whether the user owes money (can settle).
+            is_simplified: Whether the current view is showing simplified debts.
         """
         buttons = []
 
@@ -168,6 +185,18 @@ class BalanceKeyboard:
                     )
                 )
             ])
+
+        # Simplified/raw toggle
+        toggle_label = "View: Simplified ✓" if is_simplified else "View: Raw Debts"
+        buttons.append([
+            InlineKeyboardButton(
+                toggle_label,
+                callback_data=cls._build_callback_data(
+                    cls.ACTION_TOGGLE_SIMPLIFY,
+                    f"user:{group_id}"
+                )
+            )
+        ])
 
         # Refresh button
         buttons.append([

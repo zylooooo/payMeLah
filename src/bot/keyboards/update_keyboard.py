@@ -6,17 +6,19 @@ class UpdateKeyboard:
 
     PREFIX = "update_profile_"
     
-    # Field names (removed redundant wrapper)
+    # Field names
     FIELD_FIRST_NAME = "first_name"
     FIELD_LAST_NAME = "last_name"
     FIELD_PREFERRED_CURRENCY = "preferred_currency"
-    
+    FIELD_SIMPLIFY_DEBTS = "simplify_debts"
+
     # Callback actions
     ACTION_SKIP = "skip"
     ACTION_CANCEL = "cancel"
     ACTION_BACK = "back"
     ACTION_EDIT = "edit"
     ACTION_CONFIRM = "confirm"
+    ACTION_SELECT = "select"  # Used for boolean/choice field selections
 
     @classmethod
     def get_navigation_keyboard(cls, current_field: str, is_first: bool = False) -> InlineKeyboardMarkup:
@@ -46,6 +48,48 @@ class UpdateKeyboard:
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
+    def get_boolean_field_keyboard(cls, current_field: str, is_first: bool = False) -> InlineKeyboardMarkup:
+        """
+        Generate a selection keyboard for boolean fields.
+        Shows two labelled options plus Skip/Back/Cancel navigation.
+        Callback data encodes both field and value: action:field:value.
+        """
+        buttons = []
+
+        if not is_first:
+            buttons.append([
+                InlineKeyboardButton(
+                    "<< Back",
+                    callback_data=cls._build_callback_data(cls.ACTION_BACK, current_field)
+                )
+            ])
+
+        # Option buttons — value encoded in the field segment
+        buttons.append([
+            InlineKeyboardButton(
+                "Simplified Debts",
+                callback_data=cls._build_callback_data(cls.ACTION_SELECT, f"{current_field}:true")
+            ),
+            InlineKeyboardButton(
+                "Raw Debts",
+                callback_data=cls._build_callback_data(cls.ACTION_SELECT, f"{current_field}:false")
+            )
+        ])
+
+        buttons.append([
+            InlineKeyboardButton(
+                ">> Skip",
+                callback_data=cls._build_callback_data(cls.ACTION_SKIP, current_field)
+            ),
+            InlineKeyboardButton(
+                "X Cancel",
+                callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+            )
+        ])
+
+        return InlineKeyboardMarkup(buttons)
+
+    @classmethod
     def get_summary_keyboard(cls) -> InlineKeyboardMarkup:
         """Generate keyboard for summary screen."""
         buttons = [
@@ -63,6 +107,10 @@ class UpdateKeyboard:
                 InlineKeyboardButton(
                     "Edit Currency",
                     callback_data=cls._build_callback_data(cls.ACTION_EDIT, cls.FIELD_PREFERRED_CURRENCY)
+                ),
+                InlineKeyboardButton(
+                    "Edit Debt View",
+                    callback_data=cls._build_callback_data(cls.ACTION_EDIT, cls.FIELD_SIMPLIFY_DEBTS)
                 )
             ],
             [
