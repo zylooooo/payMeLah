@@ -18,7 +18,8 @@ from bot.conversations import (
     create_update_conversation_handler,
     create_group_conversation_handler,
     create_expense_conversation_handler,
-    create_edit_expense_conversation_handler
+    create_edit_expense_conversation_handler,
+    create_settle_conversation_handler
 )
 from infrastructure import close_db
 import logging
@@ -53,6 +54,9 @@ class Bot:
         self.app.add_handler(create_group_conversation_handler())
         self.app.add_handler(create_expense_conversation_handler())
         self.app.add_handler(create_edit_expense_conversation_handler())
+        # Settle handler must be before the balance callback handler so it
+        # intercepts balance_settle_up callbacks before the generic handler does.
+        self.app.add_handler(create_settle_conversation_handler())
 
         # Add command handlers
         self.app.add_handler(CommandHandler("start", start_command))

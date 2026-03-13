@@ -30,6 +30,7 @@ class Group(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, comment='Group creation timestamp')
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, comment='Group last update timestamp')
     simplify_debts = Column(Boolean, default=True, nullable=False, comment='Whether to show simplified debts by default for this group')
+    is_archived = Column(Boolean, default=False, nullable=False, comment='Whether this group has been archived by the owner')
 
     # Relationships
     members = relationship('GroupMember', back_populates='group', cascade='all, delete-orphan')
@@ -46,7 +47,8 @@ class Group(Base):
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
-            'simplify_debts': self.simplify_debts
+            'simplify_debts': self.simplify_debts,
+            'is_archived': self.is_archived,
         }
 
 class GroupMember(Base):

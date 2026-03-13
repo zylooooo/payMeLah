@@ -13,6 +13,7 @@ class CreateGroupStates(Enum):
     NAME = auto()
     DESCRIPTION = auto()
     CURRENCY = auto()
+    SIMPLIFY_DEBTS = auto()
     SUMMARY = auto()
 
 class CreateExpenseStates(Enum):
@@ -28,6 +29,13 @@ class CreateExpenseStates(Enum):
     ENTER_PERCENTAGES = auto()
     ENTER_CUSTOM = auto()
     SUMMARY = auto()
+
+
+class SettleStates(Enum):
+    """States for the settle-up conversation."""
+    SELECT_RECIPIENT = auto()   # Pick who to pay
+    ENTER_AMOUNT = auto()       # Confirm or type a custom amount
+    CONFIRM = auto()            # Final confirmation before recording
 
 
 class EditExpenseStates(Enum):

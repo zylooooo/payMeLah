@@ -7,6 +7,7 @@ from shared import (
 )
 from .group_service import GroupService
 from .user_service import UserService
+from .currency_service import CurrencyService
 from typing import Dict, List, Tuple
 from decimal import Decimal
 from collections import defaultdict
@@ -59,11 +60,18 @@ class BalanceService:
 
         members = await GroupService.get_group_members_with_details(db, group_id)
         member_ids = [m['user_id'] for m in members]
+        group_currency = group['default_currency']
 
-        # Calculate raw net debts (expense debts minus payments already made)
-        expense_debts = await BalanceService._calculate_expense_debts(db, group_id, member_ids)
-        payment_credits = await BalanceService._calculate_payment_credits(db, group_id, member_ids)
+        # Calculate raw net debts (expense debts minus payments already made).
+        # All amounts are converted to the group's default currency before summing.
+        expense_debts, expense_warnings = await BalanceService._calculate_expense_debts(
+            db, group_id, member_ids, group_currency
+        )
+        payment_credits, payment_warnings = await BalanceService._calculate_payment_credits(
+            db, group_id, member_ids, group_currency
+        )
         net_debts = BalanceService._combine_debts_and_payments(expense_debts, payment_credits)
+        conversion_warnings = expense_warnings + payment_warnings
 
         # Produce the debt list — simplified or raw
         if simplify:
@@ -90,12 +98,21 @@ class BalanceService:
             })
         members_with_balances.sort(key=lambda x: x['balance'], reverse=True)
 
+        total_spend, spend_warnings = await BalanceService._calculate_total_spend(
+            db, group_id, group_currency
+        )
+        per_currency_totals = await BalanceService._get_per_currency_totals(db, group_id)
+        conversion_warnings = list(dict.fromkeys(conversion_warnings + spend_warnings))
+
         logger.info(f"Calculated balances for group {group_id}: {len(debts_list)} debt(s)")
         return {
             'group': group,
             'members': members_with_balances,
             'debts': debts_list,
-            'currency': group['default_currency']
+            'currency': group_currency,
+            'conversion_warnings': conversion_warnings,
+            'total_spend': total_spend,
+            'per_currency_totals': per_currency_totals,
         }
 
     @staticmethod
@@ -154,12 +171,23 @@ class BalanceService:
                     'amount': debt['amount']
                 })
 
+        total_paid, total_share, spend_warnings = await BalanceService._calculate_user_spend_stats(
+            db, group_id, user_id, group_balances['currency']
+        )
+        all_warnings = list(dict.fromkeys(
+            group_balances.get('conversion_warnings', []) + spend_warnings
+        ))
+
         return {
             'group': group_balances['group'],
             'net_balance': user_balance['balance'] if user_balance else Decimal('0'),
             'owes_to': owes_to,
             'owed_by': owed_by,
-            'currency': group_balances['currency']
+            'currency': group_balances['currency'],
+            'conversion_warnings': all_warnings,
+            'total_paid': total_paid,
+            'total_share': total_share,
+            'total_spend': group_balances.get('total_spend', Decimal('0')),
         }
 
     @staticmethod
@@ -172,17 +200,28 @@ class BalanceService:
         Always uses simplified debts (summary view).
 
         Returns:
-            Dict with keys: groups, total_owed (by currency), total_owes (by currency).
+            Dict with keys: groups, total_owed (by currency), total_owes (by currency),
+            preferred_currency, preferred_total (converted grand total).
         """
         logger.info(f"Getting total balances for user {user_id}")
 
         groups = await GroupService.get_all_groups_by_user_id(db, user_id)
         if not groups:
-            return {'groups': [], 'total_owed': {}, 'total_owes': {}}
+            return {
+                'groups': [], 'total_owed': {}, 'total_owes': {},
+                'preferred_currency': 'SGD',
+                'preferred_total': {'owed': Decimal('0'), 'owes': Decimal('0'), 'conversion_failed': False}
+            }
+
+        user = await UserService.get_user_by_id(db, user_id)
+        preferred_currency = user.get('preferred_currency', 'SGD') if user else 'SGD'
 
         group_balances = []
         total_owed_by_currency = defaultdict(Decimal)
         total_owes_by_currency = defaultdict(Decimal)
+        preferred_owed = Decimal('0')
+        preferred_owes = Decimal('0')
+        conversion_failed = False
 
         for group in groups:
             try:
@@ -205,6 +244,18 @@ class BalanceService:
                     total_owed_by_currency[currency] += net
                 elif net < 0:
                     total_owes_by_currency[currency] += abs(net)
+
+                # Contribute to the preferred-currency grand total
+                if net != 0:
+                    try:
+                        converted = await CurrencyService.convert(abs(net), currency, preferred_currency)
+                        if net > 0:
+                            preferred_owed += converted
+                        else:
+                            preferred_owes += converted
+                    except ValueError:
+                        conversion_failed = True
+
             except Exception as e:
                 logger.warning(f"Error getting balance for group {group['id']}: {e}")
                 continue
@@ -213,7 +264,13 @@ class BalanceService:
         return {
             'groups': group_balances,
             'total_owed': dict(total_owed_by_currency),
-            'total_owes': dict(total_owes_by_currency)
+            'total_owes': dict(total_owes_by_currency),
+            'preferred_currency': preferred_currency,
+            'preferred_total': {
+                'owed': preferred_owed,
+                'owes': preferred_owes,
+                'conversion_failed': conversion_failed,
+            },
         }
 
     @staticmethod
@@ -278,57 +335,187 @@ class BalanceService:
         return simplified
 
     @staticmethod
+    async def _get_per_currency_totals(
+        db: AsyncSession,
+        group_id: int,
+    ) -> dict:
+        """
+        Sum all expense amounts per original currency (before any conversion).
+        Used to show a multi-currency breakdown in the balance view.
+
+        Returns:
+            Dict of {currency_code: total_amount} in original currencies.
+        """
+        totals: dict = {}
+        result = await db.execute(
+            select(Expense.amount, Expense.currency).where(Expense.group_id == group_id)
+        )
+        for amount, currency in result.all():
+            amount = Decimal(str(amount))
+            totals[currency] = totals.get(currency, Decimal('0')) + amount
+        return totals
+
+    @staticmethod
+    async def _calculate_total_spend(
+        db: AsyncSession,
+        group_id: int,
+        group_currency: str,
+    ) -> Tuple[Decimal, List[str]]:
+        """
+        Sum the amount of every expense in the group, converted to group_currency.
+        Includes all expenses regardless of settlement status.
+
+        Returns:
+            Tuple of (total_spend, conversion_warning_strings).
+        """
+        total = Decimal('0')
+        warnings: List[str] = []
+
+        result = await db.execute(
+            select(Expense.amount, Expense.currency).where(Expense.group_id == group_id)
+        )
+        for amount, currency in result.all():
+            amount = Decimal(str(amount))
+            if currency != group_currency:
+                try:
+                    amount = await CurrencyService.convert(amount, currency, group_currency)
+                except ValueError:
+                    warning = f"{currency} → {group_currency}"
+                    if warning not in warnings:
+                        warnings.append(warning)
+            total += amount
+
+        return total, warnings
+
+    @staticmethod
+    async def _calculate_user_spend_stats(
+        db: AsyncSession,
+        group_id: int,
+        user_id: int,
+        group_currency: str,
+    ) -> Tuple[Decimal, Decimal, List[str]]:
+        """
+        Calculate how much a user has paid out-of-pocket and what their total
+        share across all group expenses is (regardless of settlement status).
+
+        Returns:
+            Tuple of (total_paid, total_share, conversion_warning_strings).
+        """
+        total_paid = Decimal('0')
+        total_share = Decimal('0')
+        warnings: List[str] = []
+
+        # Expenses where the user was the payer
+        paid_result = await db.execute(
+            select(Expense.amount, Expense.currency)
+            .where(and_(Expense.group_id == group_id, Expense.payer_id == user_id))
+        )
+        for amount, currency in paid_result.all():
+            amount = Decimal(str(amount))
+            if currency != group_currency:
+                try:
+                    amount = await CurrencyService.convert(amount, currency, group_currency)
+                except ValueError:
+                    warning = f"{currency} → {group_currency}"
+                    if warning not in warnings:
+                        warnings.append(warning)
+            total_paid += amount
+
+        # Sum of the user's share across all participations
+        share_result = await db.execute(
+            select(ExpenseParticipant.share_amount, Expense.currency)
+            .join(Expense, ExpenseParticipant.expense_id == Expense.id)
+            .where(and_(Expense.group_id == group_id, ExpenseParticipant.user_id == user_id))
+        )
+        for share_amount, currency in share_result.all():
+            amount = Decimal(str(share_amount))
+            if currency != group_currency:
+                try:
+                    amount = await CurrencyService.convert(amount, currency, group_currency)
+                except ValueError:
+                    warning = f"{currency} → {group_currency}"
+                    if warning not in warnings:
+                        warnings.append(warning)
+            total_share += amount
+
+        return total_paid, total_share, warnings
+
+    @staticmethod
     async def _calculate_expense_debts(
         db: AsyncSession,
         group_id: int,
-        member_ids: List[int]
-    ) -> Dict[Tuple[int, int], Decimal]:
+        member_ids: List[int],
+        group_currency: str,
+    ) -> Tuple[Dict[Tuple[int, int], Decimal], List[str]]:
         """
         Calculate debts from unsettled expense participations.
+        Each share amount is converted to group_currency before summing.
 
         Returns:
-            {(debtor_id, creditor_id): amount} — debtor owes creditor this amount.
+            Tuple of (debts dict, list of human-readable conversion warning strings).
+            debts: {(debtor_id, creditor_id): amount} in group_currency.
         """
         debts: Dict[Tuple[int, int], Decimal] = defaultdict(Decimal)
+        warnings: List[str] = []
 
         result = await db.execute(
-            select(ExpenseParticipant, Expense.payer_id)
+            select(ExpenseParticipant, Expense.payer_id, Expense.currency)
             .join(Expense, ExpenseParticipant.expense_id == Expense.id)
             .where(
                 and_(
                     Expense.group_id == group_id,
-                    ExpenseParticipant.is_settled == False,
                     ExpenseParticipant.user_id != Expense.payer_id
                 )
             )
         )
-        for participation, payer_id in result.all():
-            debts[(participation.user_id, payer_id)] += Decimal(str(participation.share_amount))
+        for participation, payer_id, expense_currency in result.all():
+            amount = Decimal(str(participation.share_amount))
+            if expense_currency != group_currency:
+                try:
+                    amount = await CurrencyService.convert(amount, expense_currency, group_currency)
+                except ValueError as e:
+                    logger.warning(f"Currency conversion failed ({expense_currency}→{group_currency}): {e}")
+                    warning = f"{expense_currency} → {group_currency}"
+                    if warning not in warnings:
+                        warnings.append(warning)
+            debts[(participation.user_id, payer_id)] += amount
 
-        return debts
+        return debts, warnings
 
     @staticmethod
     async def _calculate_payment_credits(
         db: AsyncSession,
         group_id: int,
-        member_ids: List[int]
-    ) -> Dict[Tuple[int, int], Decimal]:
+        member_ids: List[int],
+        group_currency: str,
+    ) -> Tuple[Dict[Tuple[int, int], Decimal], List[str]]:
         """
         Calculate credits from recorded payments/settlements.
+        Each payment amount is converted to group_currency before summing.
 
         Returns:
-            {(from_user_id, to_user_id): amount} — payments already made.
+            Tuple of (credits dict, list of conversion warning strings).
         """
         credits: Dict[Tuple[int, int], Decimal] = defaultdict(Decimal)
+        warnings: List[str] = []
 
         result = await db.execute(
             select(Payment).where(Payment.group_id == group_id)
         )
         for payment in result.scalars().all():
             if payment.from_user_id and payment.to_user_id:
-                credits[(payment.from_user_id, payment.to_user_id)] += Decimal(str(payment.amount))
+                amount = Decimal(str(payment.amount))
+                if payment.currency != group_currency:
+                    try:
+                        amount = await CurrencyService.convert(amount, payment.currency, group_currency)
+                    except ValueError as e:
+                        logger.warning(f"Payment currency conversion failed ({payment.currency}→{group_currency}): {e}")
+                        warning = f"{payment.currency} → {group_currency}"
+                        if warning not in warnings:
+                            warnings.append(warning)
+                credits[(payment.from_user_id, payment.to_user_id)] += amount
 
-        return credits
+        return credits, warnings
 
     @staticmethod
     def _combine_debts_and_payments(

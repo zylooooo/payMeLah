@@ -6,9 +6,10 @@ from decimal import Decimal
 from infrastructure import get_db
 from services import GroupService, UserService
 from services.balance_service import BalanceService
+from services.payment_service import PaymentService
 from bot.keyboards import GroupKeyboard
 from bot.keyboards.balance_keyboard import BalanceKeyboard
-from bot.utils import validate_chat_type
+from bot.utils import validate_chat_type, h, rate_limit
 from shared import (
     GroupNotFoundException,
     UnauthorizedActionException
@@ -22,13 +23,13 @@ ERROR_MSG: str = "An unexpected error has occurred. Please try again later."
 
 
 def _get_display_name(user_data: dict) -> str:
-    """Get display name from user data."""
+    """Get HTML-escaped display name from user data."""
     if user_data.get('first_name'):
         name = user_data['first_name']
         if user_data.get('last_name'):
             name += f" {user_data['last_name']}"
-        return name
-    return user_data.get('username') or f"User {user_data.get('user_id')}"
+        return h(name)
+    return h(user_data.get('username') or f"User {user_data.get('user_id')}")
 
 
 def _format_amount(amount: Decimal, currency: str) -> str:
@@ -61,6 +62,7 @@ async def _get_effective_simplify(
     return user.get('simplify_debts', True) if user else True
 
 
+@rate_limit
 @validate_chat_type("private", "group", "supergroup")
 async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -148,9 +150,10 @@ async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         update, context, user_groups[0]['id'], telegram_user.id, simplify=simplify
                     )
                 else:
-                    # Multiple groups - show selection
-                    context.chat_data['balance_groups'] = user_groups
-                    context.chat_data['balance_groups_page'] = 0
+                    # Multiple groups — store per-user and track chat for re-fetch
+                    context.user_data['balance_groups'] = user_groups
+                    context.user_data['balance_groups_page'] = 0
+                    context.user_data['balance_chat_id'] = telegram_chat_id
 
                     message = (
                         "<b>View Group Balances</b>\n\n"
@@ -160,16 +163,19 @@ async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_groups, page=0, action_prefix="balances"
                     )
 
-                    await update.message.reply_text(
+                    sent = await update.message.reply_text(
                         message,
                         parse_mode="HTML",
                         reply_markup=keyboard
                     )
+                    # Track who owns this keyboard so other group members can't hijack it
+                    context.chat_data[f'kbd_owner_{sent.message_id}'] = telegram_user.id
         except Exception as e:
             logger.error(f"Error in balances command: {e}", exc_info=True)
             await update.message.reply_text(ERROR_MSG)
 
 
+@rate_limit
 @validate_chat_type("private", "group", "supergroup")
 async def mybalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -256,9 +262,10 @@ async def mybalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         update, context, user_groups[0]['id'], telegram_user.id, simplify=simplify
                     )
                 else:
-                    # Multiple groups - show selection
-                    context.chat_data['balance_groups'] = user_groups
-                    context.chat_data['balance_groups_page'] = 0
+                    # Multiple groups — store per-user and track chat for re-fetch
+                    context.user_data['balance_groups'] = user_groups
+                    context.user_data['balance_groups_page'] = 0
+                    context.user_data['balance_chat_id'] = telegram_chat_id
 
                     message = (
                         "<b>View My Balance</b>\n\n"
@@ -268,16 +275,18 @@ async def mybalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_groups, page=0, action_prefix="mybalance"
                     )
 
-                    await update.message.reply_text(
+                    sent = await update.message.reply_text(
                         message,
                         parse_mode="HTML",
                         reply_markup=keyboard
                     )
+                    context.chat_data[f'kbd_owner_{sent.message_id}'] = telegram_user.id
         except Exception as e:
             logger.error(f"Error in mybalance command: {e}", exc_info=True)
             await update.message.reply_text(ERROR_MSG)
 
 
+@rate_limit
 @validate_chat_type("private")
 async def mytotal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -432,45 +441,63 @@ def _format_group_balances_message(balances: dict) -> str:
     members = balances['members']
     debts = balances['debts']
     currency = balances['currency']
+    conversion_warnings = balances.get('conversion_warnings', [])
 
-    message = f"<b>Balances: {group['name']}</b>\n"
-    message += f"<i>Currency: {currency}</i>\n\n"
+    message = f"<b>Balances: {h(group['name'])}</b>\n"
+    message += f"<i>Currency: {h(currency)}</i>\n\n"
+
+    if conversion_warnings:
+        pairs = ", ".join(conversion_warnings)
+        message += (
+            f"⚠️ <i>Could not convert rates for: {pairs}. "
+            "Some amounts may be in their original currency.</i>\n\n"
+        )
 
     # Check if all settled
     has_unsettled = any(m['balance'] != 0 for m in members)
 
     if not has_unsettled:
         message += "All settled up! No outstanding balances.\n"
-        return message
+    else:
+        # Member balances summary
+        message += "<b>Member Summary:</b>\n"
+        for member in members:
+            name = _get_display_name(member)
+            balance = member['balance']
 
-    # Member balances summary
-    message += "<b>Member Summary:</b>\n"
-    for member in members:
-        name = _get_display_name(member)
-        balance = member['balance']
+            if balance > 0:
+                message += f"  {name}: gets back {_format_amount(balance, currency)}\n"
+            elif balance < 0:
+                message += f"  {name}: owes {_format_amount(abs(balance), currency)}\n"
+            else:
+                message += f"  {name}: settled up\n"
 
-        if balance > 0:
-            message += f"  {name}: gets back {_format_amount(balance, currency)}\n"
-        elif balance < 0:
-            message += f"  {name}: owes {_format_amount(abs(balance), currency)}\n"
+        # Individual debts
+        if debts:
+            message += "\n<b>Who Owes Whom:</b>\n"
+
+            members_lookup = {m['user_id']: m for m in members}
+            for debt in debts:
+                from_user = members_lookup.get(debt['from_user_id'], {})
+                to_user = members_lookup.get(debt['to_user_id'], {})
+                from_name = _get_display_name(from_user) if from_user else f"User {debt['from_user_id']}"
+                to_name = _get_display_name(to_user) if to_user else f"User {debt['to_user_id']}"
+                message += f"  {from_name} -> {to_name}: {_format_amount(debt['amount'], currency)}\n"
+
+    # Multi-currency breakdown (only shown when group has expenses in multiple currencies)
+    per_currency = balances.get('per_currency_totals', {})
+    if len(per_currency) > 1:
+        message += "\n<b>Expenses by Currency:</b>\n"
+        for cur, total in sorted(per_currency.items()):
+            message += f"  {h(cur)}: {_format_amount(total, cur)}\n"
+
+    # Always show total group spend (converted to group default currency)
+    total_spend = balances.get('total_spend')
+    if total_spend is not None and total_spend > 0:
+        if len(per_currency) > 1:
+            message += f"  → Total ({h(currency)}): {_format_amount(total_spend, currency)}\n"
         else:
-            message += f"  {name}: settled up\n"
-
-    # Individual debts
-    if debts:
-        message += "\n<b>Who Owes Whom:</b>\n"
-
-        # Get member lookup
-        members_lookup = {m['user_id']: m for m in members}
-
-        for debt in debts:
-            from_user = members_lookup.get(debt['from_user_id'], {})
-            to_user = members_lookup.get(debt['to_user_id'], {})
-            from_name = _get_display_name(from_user) if from_user else f"User {debt['from_user_id']}"
-            to_name = _get_display_name(to_user) if to_user else f"User {debt['to_user_id']}"
-            amount = debt['amount']
-
-            message += f"  {from_name} -> {to_name}: {_format_amount(amount, currency)}\n"
+            message += f"\n<b>Total Group Spend:</b> {_format_amount(total_spend, currency)}\n"
 
     return message
 
@@ -482,9 +509,17 @@ def _format_user_balance_message(balance: dict) -> str:
     owes_to = balance['owes_to']
     owed_by = balance['owed_by']
     currency = balance['currency']
+    conversion_warnings = balance.get('conversion_warnings', [])
 
-    message = f"<b>My Balance: {group['name']}</b>\n"
-    message += f"<i>Currency: {currency}</i>\n\n"
+    message = f"<b>My Balance: {h(group['name'])}</b>\n"
+    message += f"<i>Currency: {h(currency)}</i>\n\n"
+
+    if conversion_warnings:
+        pairs = ", ".join(conversion_warnings)
+        message += (
+            f"⚠️ <i>Could not convert rates for: {pairs}. "
+            "Some amounts may be in their original currency.</i>\n\n"
+        )
 
     # Net balance summary
     if net_balance > 0:
@@ -493,7 +528,6 @@ def _format_user_balance_message(balance: dict) -> str:
         message += f"<b>You owe {_format_amount(abs(net_balance), currency)}</b>\n\n"
     else:
         message += "<b>You are all settled up!</b>\n\n"
-        return message
 
     # Who owes you
     if owed_by:
@@ -509,6 +543,19 @@ def _format_user_balance_message(balance: dict) -> str:
         for debt in owes_to:
             name = _get_display_name(debt)
             message += f"  {name}: {_format_amount(debt['amount'], currency)}\n"
+        message += "\n"
+
+    # Spend stats — always show so users can see their contribution even when settled
+    total_paid = balance.get('total_paid')
+    total_share = balance.get('total_share')
+    total_spend = balance.get('total_spend')
+    if total_spend is not None and total_spend > 0:
+        message += "<b>Your Stats:</b>\n"
+        if total_paid is not None:
+            message += f"  Paid:        {_format_amount(total_paid, currency)}\n"
+        if total_share is not None:
+            message += f"  Your share:  {_format_amount(total_share, currency)}\n"
+        message += f"  Group total: {_format_amount(total_spend, currency)}\n"
 
     return message
 
@@ -518,12 +565,14 @@ def _format_total_balances_message(total_balances: dict) -> str:
     groups = total_balances['groups']
     total_owed = total_balances['total_owed']
     total_owes = total_balances['total_owes']
+    preferred_currency = total_balances.get('preferred_currency', 'SGD')
+    preferred_total = total_balances.get('preferred_total', {})
 
     message = "<b>My Total Balances</b>\n\n"
 
-    # Overall summary by currency
+    # Per-currency breakdown
     if total_owed or total_owes:
-        message += "<b>Overall Summary:</b>\n"
+        message += "<b>Overall Summary (by currency):</b>\n"
         all_currencies = set(total_owed.keys()) | set(total_owes.keys())
 
         for currency in sorted(all_currencies):
@@ -539,6 +588,27 @@ def _format_total_balances_message(total_balances: dict) -> str:
                 message += f"  {currency}: Settled up\n"
         message += "\n"
 
+    # Converted grand total in preferred currency
+    p_owed = preferred_total.get('owed', Decimal('0'))
+    p_owes = preferred_total.get('owes', Decimal('0'))
+    p_net = p_owed - p_owes
+    p_failed = preferred_total.get('conversion_failed', False)
+
+    message += f"<b>Total ({preferred_currency}):</b>\n"
+    if p_net > 0:
+        message += f"  You are owed ~{_format_amount(p_net, preferred_currency)}\n"
+    elif p_net < 0:
+        message += f"  You owe ~{_format_amount(abs(p_net), preferred_currency)}\n"
+    else:
+        message += "  All settled up\n"
+
+    if p_failed:
+        message += (
+            f"  ⚠️ <i>Some balances could not be converted to {preferred_currency}. "
+            "Total may be incomplete.</i>\n"
+        )
+    message += "\n"
+
     # Per-group breakdown
     message += "<b>By Group:</b>\n"
     for group_balance in groups:
@@ -553,7 +623,7 @@ def _format_total_balances_message(total_balances: dict) -> str:
         else:
             status = "settled"
 
-        message += f"  <b>{group_name}</b>: {status}\n"
+        message += f"  <b>{h(group_name)}</b>: {status}\n"
 
     return message
 
@@ -571,6 +641,13 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
     chat_type = update.effective_chat.type if update.effective_chat else "private"
     is_private = chat_type == "private"
 
+    # In group chats, only the user who triggered the command can interact with the keyboard
+    if not is_private:
+        owner_id = context.chat_data.get(f'kbd_owner_{query.message.message_id}')
+        if owner_id is not None and owner_id != telegram_user.id:
+            await query.answer("This is not your interaction.", show_alert=True)
+            return
+
     action, data = BalanceKeyboard.extract_callback_info(query.data)
 
     # Cancel is always safe - answer and close
@@ -579,18 +656,13 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("Closed.")
         return
 
-    # Settle up feature not yet implemented
-    if action == BalanceKeyboard.ACTION_SETTLE_UP:
-        await query.answer("Settlement feature coming soon!", show_alert=True)
-        return
-
     if action == BalanceKeyboard.ACTION_TOGGLE_SIMPLIFY:
         await _handle_toggle_simplify(query, context, data, telegram_user.id)
         return
 
     # For pagination, validate context data exists before answering
     if action in [BalanceKeyboard.ACTION_NEXT, BalanceKeyboard.ACTION_PREV]:
-        groups = context.user_data.get('balance_groups') if is_private else context.chat_data.get('balance_groups')
+        groups = context.user_data.get('balance_groups')
         if not groups:
             await query.answer("This list has expired.", show_alert=True)
             await query.edit_message_text("Session expired. Please use the command again.")
@@ -598,7 +670,7 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
 
     # For back to list, validate context or prepare to re-fetch
     if action == BalanceKeyboard.ACTION_BACK_TO_LIST:
-        groups = context.user_data.get('balance_groups') if is_private else context.chat_data.get('balance_groups')
+        groups = context.user_data.get('balance_groups')
         if not groups:
             # Will be re-fetched in _handle_back_to_list, just log for now
             logger.debug(f"Balance groups not in context for user {telegram_user.id}, will re-fetch")
@@ -620,6 +692,10 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if action == BalanceKeyboard.ACTION_BACK_TO_LIST:
         await _handle_back_to_list(query, context, telegram_user.id, is_private)
+        return
+
+    if action == BalanceKeyboard.ACTION_PAYMENT_HISTORY:
+        await _handle_payment_history(query, data, telegram_user.id)
         return
 
 
@@ -695,21 +771,14 @@ async def _handle_pagination(
     action_prefix = parts[0]
     page = int(parts[1])
 
-    # Get groups from context
-    if is_private:
-        groups = context.user_data.get('balance_groups', [])
-    else:
-        groups = context.chat_data.get('balance_groups', [])
+    # Groups are always stored in user_data (per-user, works for both private and group chats)
+    groups = context.user_data.get('balance_groups', [])
 
     if not groups:
         await query.edit_message_text("Group list expired. Please try the command again.")
         return
 
-    # Update page
-    if is_private:
-        context.user_data['balance_groups_page'] = page
-    else:
-        context.chat_data['balance_groups_page'] = page
+    context.user_data['balance_groups_page'] = page
 
     if action_prefix == "balances":
         title = "View Group Balances"
@@ -870,27 +939,26 @@ async def _handle_back_to_list(
     is_private: bool
 ) -> None:
     """Handle back to group list navigation."""
-    # Get stored groups and page
-    if is_private:
-        groups = context.user_data.get('balance_groups', [])
-        page = context.user_data.get('balance_groups_page', 0)
-    else:
-        groups = context.chat_data.get('balance_groups', [])
-        page = context.chat_data.get('balance_groups_page', 0)
+    groups = context.user_data.get('balance_groups', [])
+    page = context.user_data.get('balance_groups_page', 0)
 
     # Determine action prefix from stored view
     balance_view = context.user_data.get('balance_view', {})
     action_prefix = balance_view.get('type', 'balances')
 
     if not groups:
-        # Re-fetch groups
+        # Re-fetch groups, respecting the original chat scope
         try:
             async with get_db() as db:
-                groups = await GroupService.get_all_groups_by_user_id(db, user_id)
-                if is_private:
-                    context.user_data['balance_groups'] = groups
+                if not is_private:
+                    # In group chat, only show groups for this specific chat
+                    chat_id = context.user_data.get('balance_chat_id') or query.message.chat_id
+                    all_chat_groups = await GroupService.get_group_by_chat_id(db, chat_id)
+                    groups = [g for g in all_chat_groups
+                              if await GroupService.is_member(db, g['id'], user_id)]
                 else:
-                    context.chat_data['balance_groups'] = groups
+                    groups = await GroupService.get_all_groups_by_user_id(db, user_id)
+                context.user_data['balance_groups'] = groups
         except Exception as e:
             logger.error(f"Error fetching groups: {e}", exc_info=True)
             await query.edit_message_text("Failed to load groups. Please try the command again.")
@@ -915,6 +983,62 @@ async def _handle_back_to_list(
         parse_mode="HTML",
         reply_markup=keyboard
     )
+
+
+async def _handle_payment_history(query, data: str, user_id: int) -> None:
+    """Show recent payment records for a group."""
+    if not data:
+        await query.edit_message_text("Invalid request.")
+        return
+
+    try:
+        group_id = int(data)
+    except ValueError:
+        await query.edit_message_text("Invalid group.")
+        return
+
+    try:
+        async with get_db() as db:
+            if not await GroupService.is_member(db, group_id, user_id):
+                await query.edit_message_text("You are not a member of this group.")
+                return
+
+            group = await GroupService.get_group_by_id(db, group_id)
+            if not group:
+                await query.edit_message_text("Group not found.")
+                return
+
+            payments = await PaymentService.get_payments_in_group(db, group_id)
+            members = await GroupService.get_group_members_with_details(db, group_id)
+
+        members_lookup = {m['user_id']: m for m in members}
+
+        message = f"<b>Payment History: {h(group['name'])}</b>\n\n"
+
+        if not payments:
+            message += "No payments recorded yet."
+        else:
+            for p in payments[:20]:  # cap at 20 most recent
+                from_user = members_lookup.get(p['from_user_id'], {})
+                to_user = members_lookup.get(p['to_user_id'], {})
+                from_name = _get_display_name(from_user) if from_user else h(f"User {p['from_user_id']}")
+                to_name = _get_display_name(to_user) if to_user else h(f"User {p['to_user_id']}")
+                date_str = p['created_at'][:10] if p.get('created_at') else ''
+                note = f" — {h(p['description'])}" if p.get('description') else ''
+                message += (
+                    f"<b>{from_name}</b> paid <b>{to_name}</b>\n"
+                    f"  {_format_amount(p['amount'], p['currency'])}{note}\n"
+                    f"  <i>{date_str}</i>\n\n"
+                )
+
+            if len(payments) > 20:
+                message += f"<i>Showing 20 of {len(payments)} payments.</i>\n"
+
+        keyboard = BalanceKeyboard.get_close_keyboard()
+        await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Error showing payment history: {e}", exc_info=True)
+        await query.edit_message_text(ERROR_MSG)
 
 
 def create_balance_callback_handler() -> CallbackQueryHandler:

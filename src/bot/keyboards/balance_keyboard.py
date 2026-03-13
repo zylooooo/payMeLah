@@ -18,6 +18,7 @@ class BalanceKeyboard:
     ACTION_CANCEL = "cancel"
     ACTION_NEXT = "next"
     ACTION_PREV = "prev"
+    ACTION_PAYMENT_HISTORY = "pay_hist"
 
     @classmethod
     def get_group_selection_keyboard(
@@ -126,6 +127,17 @@ class BalanceKeyboard:
                 callback_data=cls._build_callback_data(
                     cls.ACTION_TOGGLE_SIMPLIFY,
                     f"group:{group_id}"
+                )
+            )
+        ])
+
+        # Payment history
+        buttons.append([
+            InlineKeyboardButton(
+                "Payment History",
+                callback_data=cls._build_callback_data(
+                    cls.ACTION_PAYMENT_HISTORY,
+                    str(group_id)
                 )
             )
         ])

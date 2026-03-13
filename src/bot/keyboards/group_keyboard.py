@@ -19,13 +19,26 @@ class GroupKeyboard:
     ACTION_BACK = "back"
     ACTION_BACK_TO_LIST = "back_list"
     ACTION_TOGGLE_SIMPLIFY = "toggle_simplify"
+    ACTION_MANAGE_ROLES = "manage_roles"
+    ACTION_PROMOTE = "promote"
     ACTION_NEXT = "next"
     ACTION_PREV = "prev"
     ACTION_SKIP = "skip"
     ACTION_VIEW_MEMBERS = "view_members"
+    ACTION_SIMPLIFY_ON = "simplify_on"
+    ACTION_SIMPLIFY_OFF = "simplify_off"
+    ACTION_ARCHIVE = "archive"
+    ACTION_UNARCHIVE = "unarchive"
+    ACTION_VIEW_ARCHIVED = "view_archived"
 
     @classmethod
-    def get_group_list_keyboard(cls, groups: List[dict], page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
+    def get_group_list_keyboard(
+        cls,
+        groups: List[dict],
+        page: int = 0,
+        per_page: int = 5,
+        show_archived_button: bool = False,
+    ) -> InlineKeyboardMarkup:
         """Generate keyboard for listing groups with pagination."""
         buttons = []
 
@@ -41,7 +54,7 @@ class GroupKeyboard:
                     callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group['id']))
                 )
             ])
-        
+
         # Pagination buttons
         nav_buttons = []
         if page > 0:
@@ -54,7 +67,16 @@ class GroupKeyboard:
             )
         if nav_buttons:
             buttons.append(nav_buttons)
-        
+
+        # View archived groups (private chat only)
+        if show_archived_button:
+            buttons.append([
+                InlineKeyboardButton(
+                    "📦 Archived Groups",
+                    callback_data=cls._build_callback_data(cls.ACTION_VIEW_ARCHIVED)
+                )
+            ])
+
         # Cancel button
         buttons.append([
             InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
@@ -67,7 +89,8 @@ class GroupKeyboard:
         cls,
         group_id: int,
         user_role: Optional[GroupMemberRole] = None,
-        simplify_debts: bool = True
+        simplify_debts: bool = True,
+        is_archived: bool = False,
     ) -> InlineKeyboardMarkup:
         """
         Generate keyboard for group actions based on user's role.
@@ -76,6 +99,7 @@ class GroupKeyboard:
             group_id: The group ID.
             user_role: The requesting user's role in this group.
             simplify_debts: Current group simplify_debts setting (shown on toggle button).
+            is_archived: Whether the group is currently archived.
         """
         buttons = []
 
@@ -104,8 +128,28 @@ class GroupKeyboard:
                 )
             ])
 
-        # Owner only: delete group
+        # Owner only: manage roles + archive/delete group
         if user_role == GroupMemberRole.OWNER:
+            buttons.append([
+                InlineKeyboardButton(
+                    "Manage Roles",
+                    callback_data=cls._build_callback_data(cls.ACTION_MANAGE_ROLES, str(group_id))
+                )
+            ])
+            if is_archived:
+                buttons.append([
+                    InlineKeyboardButton(
+                        "Unarchive Group",
+                        callback_data=cls._build_callback_data(cls.ACTION_UNARCHIVE, str(group_id))
+                    )
+                ])
+            else:
+                buttons.append([
+                    InlineKeyboardButton(
+                        "Archive Trip",
+                        callback_data=cls._build_callback_data(cls.ACTION_ARCHIVE, str(group_id))
+                    )
+                ])
             buttons.append([
                 InlineKeyboardButton(
                     "Delete Group",
@@ -247,6 +291,34 @@ class GroupKeyboard:
         return callback_data and callback_data.startswith(cls.PREFIX)
 
     @classmethod
+    def get_simplify_debts_keyboard(cls) -> InlineKeyboardMarkup:
+        """Button-selection keyboard for the simplify_debts step during group creation."""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "Simplified ✓ (Recommended)",
+                    callback_data=cls._build_callback_data(cls.ACTION_SIMPLIFY_ON)
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Raw Debts",
+                    callback_data=cls._build_callback_data(cls.ACTION_SIMPLIFY_OFF)
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "<< Back",
+                    callback_data=cls._build_callback_data(cls.ACTION_BACK, "simplify_debts")
+                ),
+                InlineKeyboardButton(
+                    "X Cancel",
+                    callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+                )
+            ]
+        ])
+
+    @classmethod
     def get_members_list_keyboard(cls, group_id: int) -> InlineKeyboardMarkup:
         """Generate keyboard for members list view."""
         return InlineKeyboardMarkup([
@@ -340,5 +412,63 @@ class GroupKeyboard:
                 callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group_id))
             )
         ])
-        
+
+        return InlineKeyboardMarkup(buttons)
+
+    @classmethod
+    def get_manage_roles_keyboard(cls, group_id: int, members: List[dict]) -> InlineKeyboardMarkup:
+        """
+        Generate keyboard for managing member roles (owner only).
+        Each non-owner member gets a button showing their current role and the action to take.
+        Clicking promotes members to admin or demotes admins back to member.
+        """
+        buttons = []
+
+        role_order = {'owner': 0, 'admin': 1, 'member': 2}
+        sorted_members = sorted(members, key=lambda m: role_order.get(m.get('role', 'member'), 2))
+
+        for member in sorted_members:
+            member_role = member.get('role', 'member')
+            user_id = member.get('user_id')
+
+            # Owner row is shown as read-only info, not a button
+            if member_role == 'owner':
+                continue
+
+            display_name = member.get('first_name') or member.get('username') or f"User {user_id}"
+
+            if member_role == 'admin':
+                # Demote admin → member
+                button_text = f"⬇ Demote {display_name} (Admin → Member)"
+                new_role = "member"
+            else:
+                # Promote member → admin
+                button_text = f"⬆ Promote {display_name} (Member → Admin)"
+                new_role = "admin"
+
+            buttons.append([
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_PROMOTE, f"{group_id}:{user_id}:{new_role}"
+                    )
+                )
+            ])
+
+        if not buttons:
+            # No members to manage (only owner in group)
+            buttons.append([
+                InlineKeyboardButton(
+                    "No other members",
+                    callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+                )
+            ])
+
+        buttons.append([
+            InlineKeyboardButton(
+                "<< Back to Group",
+                callback_data=cls._build_callback_data(cls.ACTION_SELECT, str(group_id))
+            )
+        ])
+
         return InlineKeyboardMarkup(buttons)

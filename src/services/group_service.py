@@ -32,7 +32,8 @@ class GroupService:
         description: Optional[str],
         default_currency: str,
         telegram_chat_id: int,
-        created_by: int
+        created_by: int,
+        simplify_debts: bool = True
     ) -> dict:
         """
         Create a new group and add the creator as the owner of the group. By default, they are the first member of the group.
@@ -63,6 +64,7 @@ class GroupService:
                 name=name,
                 description=description,
                 default_currency=default_currency,
+                simplify_debts=simplify_debts,
                 telegram_chat_id=telegram_chat_id,
                 created_by=created_by,
                 created_at=datetime.now(timezone.utc),
@@ -197,24 +199,33 @@ class GroupService:
         return group.to_dict()
 
     @staticmethod
-    async def get_all_groups_by_user_id(db: AsyncSession, user_id: int) -> List[dict]:
+    async def get_all_groups_by_user_id(
+        db: AsyncSession,
+        user_id: int,
+        include_archived: bool = False
+    ) -> List[dict]:
         """
         Get all groups that a user is a member of.
 
         Args:
             db: AsyncSession - The database session.
             user_id: int - The Telegram user ID of the user to get the groups for.
-        
+            include_archived: If True, include archived groups in the result.
+
         Returns:
             List[dict] - A list of group data that the user is a member of.
         """
         logger.info(f"Getting all groups that user with ID {user_id} is a member of.")
-        result = await db.execute(
+        query = (
             select(Group)
             .join(GroupMember)
             .where(GroupMember.user_id == user_id)
-            .order_by(Group.created_at.desc())
         )
+        if not include_archived:
+            query = query.where(Group.is_archived == False)
+        query = query.order_by(Group.created_at.desc())
+
+        result = await db.execute(query)
         groups = result.scalars().all()
 
         group_list = [group.to_dict() for group in groups]
@@ -464,6 +475,118 @@ class GroupService:
             await db.rollback()
             raise
     
+    @staticmethod
+    async def update_member_role(
+        db: AsyncSession,
+        group_id: int,
+        target_user_id: int,
+        new_role: GroupMemberRole,
+        requesting_user_id: int
+    ) -> dict:
+        """
+        Promote or demote a group member's role. Only the owner can do this.
+        Rules:
+          - Only owners can change roles.
+          - Cannot change the owner's own role.
+          - Cannot promote/demote to owner (ownership transfer not supported).
+          - Valid transitions: member ↔ admin.
+
+        Args:
+            db: Database session.
+            group_id: The group ID.
+            target_user_id: The member whose role is being changed.
+            new_role: The new role (MEMBER or ADMIN only).
+            requesting_user_id: Must be the group owner.
+
+        Returns:
+            Updated GroupMember dict.
+
+        Raises:
+            UnauthorizedActionException, GroupMemberNotFoundException.
+        """
+        logger.info(
+            f"User {requesting_user_id} updating role of user {target_user_id} "
+            f"to {new_role} in group {group_id}"
+        )
+
+        requester_role = await GroupService.get_member_role(db, group_id, requesting_user_id)
+        if requester_role != GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Only the group owner can change member roles.")
+
+        if target_user_id == requesting_user_id:
+            raise UnauthorizedActionException("You cannot change your own role.")
+
+        if new_role == GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Ownership transfer is not supported.")
+
+        result = await db.execute(
+            select(GroupMember).where(
+                and_(GroupMember.group_id == group_id, GroupMember.user_id == target_user_id)
+            )
+        )
+        target_member = result.scalar_one_or_none()
+        if not target_member:
+            raise GroupMemberNotFoundException(
+                f"User {target_user_id} is not a member of group {group_id}."
+            )
+
+        if target_member.role == GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Cannot change the owner's role.")
+
+        target_member.role = new_role
+        await db.commit()
+        await db.refresh(target_member)
+        logger.info(f"Role updated for user {target_user_id} in group {group_id}")
+        return target_member.to_dict()
+
+    @staticmethod
+    async def archive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
+        """
+        Archive a group. Only the owner can archive.
+        Archived groups are hidden from default listings but not deleted.
+        """
+        logger.info(f"User {requesting_user_id} archiving group {group_id}")
+        role = await GroupService.get_member_role(db, group_id, requesting_user_id)
+        if role != GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Only the group owner can archive the group.")
+
+        result = await db.execute(select(Group).where(Group.id == group_id))
+        group = result.scalar_one_or_none()
+        if not group:
+            raise GroupNotFoundException(f"Group {group_id} not found.")
+
+        group.is_archived = True
+        group.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(group)
+        logger.info(f"Group {group_id} archived by user {requesting_user_id}")
+        return group.to_dict()
+
+    @staticmethod
+    async def unarchive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
+        """Restore an archived group. Only the owner can unarchive."""
+        logger.info(f"User {requesting_user_id} unarchiving group {group_id}")
+        role = await GroupService.get_member_role(db, group_id, requesting_user_id)
+        if role != GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Only the group owner can unarchive the group.")
+
+        result = await db.execute(select(Group).where(Group.id == group_id))
+        group = result.scalar_one_or_none()
+        if not group:
+            raise GroupNotFoundException(f"Group {group_id} not found.")
+
+        group.is_archived = False
+        group.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(group)
+        logger.info(f"Group {group_id} unarchived by user {requesting_user_id}")
+        return group.to_dict()
+
+    @staticmethod
+    async def get_archived_groups_by_user_id(db: AsyncSession, user_id: int) -> List[dict]:
+        """Get all archived groups that the user is a member of."""
+        return await GroupService.get_all_groups_by_user_id(db, user_id, include_archived=True)
+
     @staticmethod
     async def get_group_by_chat_id(db: AsyncSession, chat_id: int) -> List[dict]:
         """

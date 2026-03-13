@@ -38,7 +38,7 @@ class Payment(Base):
             'amount': self.amount,
             'currency': self.currency,
             'description': self.description,
-            'payment_date': self.payment_date.isoformat(),
-            'created_at': self.created_at.isoformat(),
+            'payment_date': self.payment_date.isoformat() if self.payment_date else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
             'expense_ids': self.expense_ids
         }

@@ -215,6 +215,9 @@ src/logs/
 # Virtual environments (additional patterns)
 payMeLah/
 
+# Claude
+.claude/
+
 # Alembic
 # Note: Migration files in alembic/versions/*.py SHOULD be tracked
 # The generic README file is harmless to track, but you can ignore it if preferred

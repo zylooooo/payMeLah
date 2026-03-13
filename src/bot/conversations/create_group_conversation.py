@@ -100,15 +100,17 @@ def _format_summary(group_data: Dict[str, Any]) -> str:
     name = group_data.get('name', 'Not set')
     description = group_data.get('description') or 'Not set'
     currency = group_data.get('default_currency', 'SGD').upper()
-    
-    message = (
+    simplify = group_data.get('simplify_debts', True)
+    simplify_label = "Simplified ✓" if simplify else "Raw Debts"
+
+    return (
         "<b>Group Creation Summary</b>\n\n"
         f"<b>Name:</b> {name}\n"
         f"<b>Description:</b> {description}\n"
-        f"<b>Default Currency:</b> {currency}\n\n"
+        f"<b>Default Currency:</b> {currency}\n"
+        f"<b>Debt View Default:</b> {simplify_label}\n\n"
         "Please review and confirm to create the group."
     )
-    return message
 
 
 async def _cleanup_previous_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -155,7 +157,7 @@ async def _send_or_edit_message(
 
 def _cleanup_conversation(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cleanup conversation state."""
-    for key in ['group_data', 'conversation_active', 'last_message_id']:
+    for key in ['group_data', 'conversation_active', 'last_message_id', 'group_creation_msg_id']:
         context.user_data.pop(key, None)
 
 
@@ -186,8 +188,24 @@ async def _show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return CreateGroupStates.SUMMARY
 
 
+async def _show_simplify_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Show the debt simplification preference step."""
+    message = (
+        "<b>Debt View Default</b>\n\n"
+        "<b>Simplified</b> — minimises the number of payments needed to settle all debts "
+        "(recommended for most groups).\n\n"
+        "<b>Raw Debts</b> — shows every individual debt exactly as recorded.\n\n"
+        "You can change this later in the group settings."
+    )
+    keyboard = GroupKeyboard.get_simplify_debts_keyboard()
+    await _send_or_edit_message(update, context, message, keyboard)
+    return CreateGroupStates.SIMPLIFY_DEBTS
+
+
 async def _navigate_to_next(update: Update, context: ContextTypes.DEFAULT_TYPE, current_field: str) -> int:
-    """Navigate to the next field or summary."""
+    """Navigate to the next field; insert simplify_debts step after currency."""
+    if current_field == 'default_currency':
+        return await _show_simplify_prompt(update, context)
     next_field = _get_next_field(current_field)
     if next_field:
         return await _show_field_prompt(update, context, next_field['name'])
@@ -242,8 +260,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if update.callback_query:
         query = update.callback_query
         await query.answer()
+        if not context.user_data.get('conversation_active'):
+            await query.answer("This is not your interaction.", show_alert=True)
+            return ConversationHandler.END
         action, _ = GroupKeyboard.extract_callback_info(query.data)
-        
+
         if action == GroupKeyboard.ACTION_CANCEL:
             return await cancel_group_creation(update, context)
 
@@ -267,6 +288,9 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if update.callback_query:
         query = update.callback_query
         await query.answer()
+        if not context.user_data.get('conversation_active'):
+            await query.answer("This is not your interaction.", show_alert=True)
+            return ConversationHandler.END
         action, _ = GroupKeyboard.extract_callback_info(query.data)
         
         if action == GroupKeyboard.ACTION_CANCEL:
@@ -293,6 +317,9 @@ async def handle_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if update.callback_query:
         query = update.callback_query
         await query.answer()
+        if not context.user_data.get('conversation_active'):
+            await query.answer("This is not your interaction.", show_alert=True)
+            return ConversationHandler.END
         action, _ = GroupKeyboard.extract_callback_info(query.data)
         
         if action == GroupKeyboard.ACTION_CANCEL:
@@ -317,12 +344,46 @@ async def handle_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data['group_data']['default_currency'] = user_input
     return await _navigate_to_next(update, context, 'default_currency')
 
+async def handle_simplify_debts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle debt simplification preference selection."""
+    query = update.callback_query
+    await query.answer()
+
+    if not context.user_data.get('conversation_active'):
+        await query.answer("This is not your interaction.", show_alert=True)
+        return ConversationHandler.END
+
+    action, data = GroupKeyboard.extract_callback_info(query.data)
+
+    if action == GroupKeyboard.ACTION_CANCEL:
+        return await cancel_group_creation(update, context)
+
+    if action == GroupKeyboard.ACTION_BACK:
+        # Back to currency field
+        return await _show_field_prompt(update, context, 'default_currency')
+
+    if action == GroupKeyboard.ACTION_SIMPLIFY_ON:
+        context.user_data['group_data']['simplify_debts'] = True
+        return await _show_summary(update, context)
+
+    if action == GroupKeyboard.ACTION_SIMPLIFY_OFF:
+        context.user_data['group_data']['simplify_debts'] = False
+        return await _show_summary(update, context)
+
+    return CreateGroupStates.SIMPLIFY_DEBTS
+
+
 async def handle_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirm and create the group."""
     query = update.callback_query
     await query.answer()
+
+    if not context.user_data.get('conversation_active'):
+        await query.answer("This is not your interaction.", show_alert=True)
+        return ConversationHandler.END
+
     telegram_user = update.effective_user
-    
+
     # Extract action from callback
     action, _ = GroupKeyboard.extract_callback_info(query.data)
     
@@ -346,6 +407,7 @@ async def handle_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 name=group_data.get('name'),
                 description=group_data.get('description'),
                 default_currency=group_data.get('default_currency'),
+                simplify_debts=group_data.get('simplify_debts', True),
                 telegram_chat_id=update.effective_chat.id,
                 created_by=telegram_user.id
             )
@@ -399,6 +461,9 @@ def create_group_conversation_handler() -> ConversationHandler:
             CreateGroupStates.CURRENCY: [
                 CallbackQueryHandler(handle_currency, pattern=f"^{GroupKeyboard.PREFIX}"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_currency)
+            ],
+            CreateGroupStates.SIMPLIFY_DEBTS: [
+                CallbackQueryHandler(handle_simplify_debts, pattern=f"^{GroupKeyboard.PREFIX}")
             ],
             CreateGroupStates.SUMMARY: [
                 CallbackQueryHandler(handle_summary, pattern=f"^{GroupKeyboard.PREFIX}")
