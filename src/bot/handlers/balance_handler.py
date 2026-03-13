@@ -146,9 +146,11 @@ async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Single group - show balances directly
                     async with get_db() as db:
                         simplify = await _get_effective_simplify(db, user_groups[0]['id'], telegram_user.id, context)
-                    await _show_group_balances(
+                    sent = await _show_group_balances(
                         update, context, user_groups[0]['id'], telegram_user.id, simplify=simplify
                     )
+                    if sent:
+                        context.chat_data[f'kbd_owner_{sent.message_id}'] = telegram_user.id
                 else:
                     # Multiple groups — store per-user and track chat for re-fetch
                     context.user_data['balance_groups'] = user_groups
@@ -258,9 +260,11 @@ async def mybalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Single group - show balance directly
                     async with get_db() as db:
                         simplify = await _get_effective_simplify(db, user_groups[0]['id'], telegram_user.id, context)
-                    await _show_user_balance(
+                    sent = await _show_user_balance(
                         update, context, user_groups[0]['id'], telegram_user.id, simplify=simplify
                     )
+                    if sent:
+                        context.chat_data[f'kbd_owner_{sent.message_id}'] = telegram_user.id
                 else:
                     # Multiple groups — store per-user and track chat for re-fetch
                     context.user_data['balance_groups'] = user_groups
@@ -335,8 +339,8 @@ async def _show_group_balances(
     user_id: int,
     edit_message: bool = False,
     simplify: bool = True
-) -> None:
-    """Show all balances for a group."""
+):
+    """Show all balances for a group. Returns the sent Message when using reply_text, else None."""
     try:
         async with get_db() as db:
             balances = await BalanceService.get_group_balances(
@@ -353,8 +357,9 @@ async def _show_group_balances(
                     parse_mode="HTML",
                     reply_markup=keyboard
                 )
+                return None
             else:
-                await update.message.reply_text(
+                return await update.message.reply_text(
                     message,
                     parse_mode="HTML",
                     reply_markup=keyboard
@@ -378,6 +383,7 @@ async def _show_group_balances(
             await update.callback_query.edit_message_text(error_msg)
         else:
             await update.message.reply_text(error_msg)
+    return None
 
 
 async def _show_user_balance(
@@ -387,8 +393,8 @@ async def _show_user_balance(
     user_id: int,
     edit_message: bool = False,
     simplify: bool = True
-) -> None:
-    """Show a user's balance in a specific group."""
+):
+    """Show a user's balance in a specific group. Returns the sent Message when using reply_text, else None."""
     try:
         async with get_db() as db:
             balance = await BalanceService.get_user_balance_in_group(
@@ -408,8 +414,9 @@ async def _show_user_balance(
                     parse_mode="HTML",
                     reply_markup=keyboard
                 )
+                return None
             else:
-                await update.message.reply_text(
+                return await update.message.reply_text(
                     message,
                     parse_mode="HTML",
                     reply_markup=keyboard
@@ -433,6 +440,7 @@ async def _show_user_balance(
             await update.callback_query.edit_message_text(error_msg)
         else:
             await update.message.reply_text(error_msg)
+    return None
 
 
 def _format_group_balances_message(balances: dict) -> str:
