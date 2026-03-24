@@ -62,32 +62,28 @@ class UserService:
             dict - The created user data.
         """
         logger.info(f"Creating user with ID: {user_id}")
-        try:
-            # Check if the user already exists
-            existing_user = await UserService.get_user_by_id(db, user_id)
-            if existing_user:
-                logger.warning(f"User with ID {user_id} already exists, skipping creation")
-                raise UserAlreadyExistsException(f"User with ID {user_id} already exists")
-            
-            # Create the new user
-            new_user = User(
-                id=user_id,
-                username=username,
-                first_name=first_name,
-                last_name=last_name,
-                preferred_currency='SGD',
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
-            )
+        # Check if the user already exists
+        existing_user = await UserService.get_user_by_id(db, user_id)
+        if existing_user:
+            logger.warning(f"User with ID {user_id} already exists, skipping creation")
+            raise UserAlreadyExistsException(f"User with ID {user_id} already exists")
+        
+        # Create the new user
+        new_user = User(
+            id=user_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            preferred_currency='SGD',
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
+        )
 
-            db.add(new_user)
-            await db.commit()
-            await db.refresh(new_user)
-            logger.info(f"User with ID {user_id} created successfully")
-            return new_user.to_dict()
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while creating user with ID: {user_id}: {e}", exc_info=True)
-            raise e
+        db.add(new_user)
+        await db.commit()
+        await db.refresh(new_user)
+        logger.info(f"User with ID {user_id} created successfully")
+        return new_user.to_dict()
 
     @staticmethod
     async def update_user(
