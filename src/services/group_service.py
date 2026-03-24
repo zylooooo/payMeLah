@@ -50,46 +50,37 @@ class GroupService:
             dict - A dictionary containing the created group data.
         """
         logger.info(f"Creating group '{name}' by user with ID: {created_by}")
-        try:
-            # Check if the user exists
-            user = await UserService.get_user_by_id(db, created_by)
-            if not user:
-                logger.warning(f"User with ID {created_by} is not a valid user, skipping group creation")
-                raise UserNotFoundException(
-                    f"User with ID {created_by} not found. User tried to create a group with invalid user account."
-                )
-            
-            # Create the new group
-            new_group = Group(
-                name=name,
-                description=description,
-                default_currency=default_currency,
-                simplify_debts=simplify_debts,
-                telegram_chat_id=telegram_chat_id,
-                created_by=created_by,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
-            )
-            db.add(new_group)
-            await db.flush() # Flush to get the new group ID
 
-            # Add creator as owner
-            owner_member = GroupMember(
-                group_id=new_group.id,
-                user_id=created_by,
-                role=GroupMemberRole.OWNER,
-                joined_at=datetime.now(timezone.utc)
+        user = await UserService.get_user_by_id(db, created_by)
+        if not user:
+            raise UserNotFoundException(
+                f"User with ID {created_by} not found."
             )
-            db.add(owner_member)
 
-            await db.commit()
-            await db.refresh(new_group)
-            logger.info(f"Group '{name}' created successfully")
-            return new_group.to_dict()
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while creating group '{name}': {e}", exc_info=True)
-            await db.rollback()
-            raise e
+        new_group = Group(
+            name=name,
+            description=description,
+            default_currency=default_currency,
+            simplify_debts=simplify_debts,
+            telegram_chat_id=telegram_chat_id,
+            created_by=created_by,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
+        )
+        db.add(new_group)
+        await db.flush()
+
+        owner_member = GroupMember(
+            group_id=new_group.id,
+            user_id=created_by,
+            role=GroupMemberRole.OWNER,
+            joined_at=datetime.now(timezone.utc)
+        )
+        db.add(owner_member)
+        await db.commit()
+        await db.refresh(new_group)
+        logger.info(f"Group '{name}' created successfully")
+        return new_group.to_dict()
         
     @staticmethod
     async def join_group(
@@ -112,56 +103,43 @@ class GroupService:
             bool - True if the user successfully joined the group, False otherwise.
         """
         user_id = user_data.get('id')
-        logger.info(f"User with ID {user_id} is trying to join group with ID: {group_id}")
+        logger.info(f"User {user_id} trying to join group {group_id}")
 
-        # Check if the group exists in the database
-        try:
-            group = await GroupService.get_group_by_id(db, group_id)
-            if not group:
-                raise GroupNotFoundException(f"Group with ID {group_id} not found. User tried to join a non-existent group.")
-            
-            # Check if the user is already a member of the group
-            if await GroupService.is_member(db, group_id, user_id):
-                logger.info(f"User with ID: {user_id} is already a member of group {group_id}")
-                raise GroupMemberAlreadyExistsException(
-                    f"User {user_id} is already a member of group {group_id}."
-                )
-            
-            # Validate user is in the Telegram group
-            if user_id not in telegram_group_member_ids:
-                logger.warning(f"User with ID: {user_id} is trying to join a group that he is not a member of")
-                raise UnauthorizedGroupJoinException(
-                    f"User: {user_id} is not a member of the Telegram group chat where this group is created."
-                )
-            
-            # Create user account if it doesn't exist
-            user = await UserService.get_user_by_id(db, user_id)
-            if not user:
-                user = await UserService.create_user(
-                    db,
-                    user_id=user_id,
-                    username=user_data.get('username'),
-                    first_name=user_data.get('first_name'),
-                    last_name=user_data.get('last_name')
-                )
-            
-            # Add user as member to the group
-            new_member = GroupMember(
-                group_id=group_id,
-                user_id=user_id,
-                role=GroupMemberRole.MEMBER,
-                joined_at=datetime.now(timezone.utc)
+        group = await GroupService.get_group_by_id(db, group_id)
+        if not group:
+            raise GroupNotFoundException(f"Group {group_id} not found.")
+
+        if await GroupService.is_member(db, group_id, user_id):
+            raise GroupMemberAlreadyExistsException(
+                f"User {user_id} is already a member of group {group_id}."
             )
-            db.add(new_member)
-            await db.commit()
-            await db.refresh(new_member)
 
-            logger.info(f"User with ID: {user_id} joined group with ID: {group_id} successfully")
-            return True
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while joining user {user_id} to group {group_id}: {e}", exc_info=True)
-            await db.rollback()
-            raise e
+        if user_id not in telegram_group_member_ids:
+            raise UnauthorizedGroupJoinException(
+                f"User {user_id} is not a member of the Telegram group chat where this group is created."
+            )
+
+        user = await UserService.get_user_by_id(db, user_id)
+        if not user:
+            user = await UserService.create_user(
+                db,
+                user_id=user_id,
+                username=user_data.get('username'),
+                first_name=user_data.get('first_name'),
+                last_name=user_data.get('last_name')
+            )
+
+        new_member = GroupMember(
+            group_id=group_id,
+            user_id=user_id,
+            role=GroupMemberRole.MEMBER,
+            joined_at=datetime.now(timezone.utc)
+        )
+        db.add(new_member)
+        await db.commit()
+        await db.refresh(new_member)
+        logger.info(f"User {user_id} joined group {group_id} successfully")
+        return True
 
     @staticmethod
     async def is_member(db: AsyncSession, group_id: int, user_id: int)-> bool:
@@ -331,32 +309,20 @@ class GroupService:
             UnauthorizedActionException - If the user is not the owner.
         """
         logger.info(f"User {requesting_user_id} attempting to delete group {group_id}")
-        
-        try:
-            # Get the group
-            result = await db.execute(
-                select(Group).where(Group.id == group_id)
-            )
-            group = result.scalar_one_or_none()
-            
-            if not group:
-                raise GroupNotFoundException(f"Group with ID {group_id} not found.")
-            
-            # Check if user is the owner
-            role = await GroupService.get_member_role(db, group_id, requesting_user_id)
-            if role != GroupMemberRole.OWNER:
-                raise UnauthorizedActionException("Only the group owner can delete the group.")
-            
-            # Delete the group (cascade will handle members)
-            await db.delete(group)
-            await db.commit()
-            
-            logger.info(f"Group {group_id} deleted successfully by user {requesting_user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting group {group_id}: {e}", exc_info=True)
-            await db.rollback()
-            raise
+
+        result = await db.execute(select(Group).where(Group.id == group_id))
+        group = result.scalar_one_or_none()
+        if not group:
+            raise GroupNotFoundException(f"Group with ID {group_id} not found.")
+
+        role = await GroupService.get_member_role(db, group_id, requesting_user_id)
+        if role != GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Only the group owner can delete the group.")
+
+        await db.delete(group)
+        await db.commit()
+        logger.info(f"Group {group_id} deleted successfully by user {requesting_user_id}")
+        return True
 
     @staticmethod
     async def leave_group(db: AsyncSession, group_id: int, user_id: int) -> bool:
@@ -376,35 +342,25 @@ class GroupService:
             UnauthorizedActionException - If the owner tries to leave.
         """
         logger.info(f"User {user_id} attempting to leave group {group_id}")
-        
-        try:
-            # Check if user is a member and get their role
-            result = await db.execute(
-                select(GroupMember).where(
-                    and_(GroupMember.group_id == group_id, GroupMember.user_id == user_id)
-                )
+
+        result = await db.execute(
+            select(GroupMember).where(
+                and_(GroupMember.group_id == group_id, GroupMember.user_id == user_id)
             )
-            member = result.scalar_one_or_none()
-            
-            if not member:
-                raise GroupMemberNotFoundException(f"User {user_id} is not a member of group {group_id}.")
-            
-            if member.role == GroupMemberRole.OWNER:
-                raise UnauthorizedActionException(
-                    "Group owners cannot leave. Transfer ownership or delete the group instead."
-                )
-            
-            await db.delete(member)
-            await db.commit()
-            
-            logger.info(f"User {user_id} left group {group_id} successfully")
-            return True
-        except (GroupMemberNotFoundException, UnauthorizedActionException):
-            raise
-        except Exception as e:
-            logger.error(f"Error leaving group {group_id}: {e}", exc_info=True)
-            await db.rollback()
-            raise
+        )
+        member = result.scalar_one_or_none()
+        if not member:
+            raise GroupMemberNotFoundException(f"User {user_id} is not a member of group {group_id}.")
+
+        if member.role == GroupMemberRole.OWNER:
+            raise UnauthorizedActionException(
+                "Group owners cannot leave. Transfer ownership or delete the group instead."
+            )
+
+        await db.delete(member)
+        await db.commit()
+        logger.info(f"User {user_id} left group {group_id} successfully")
+        return True
 
     @staticmethod
     async def remove_member(
@@ -431,49 +387,36 @@ class GroupService:
             UnauthorizedActionException - If the action is not authorized.
         """
         logger.info(f"User {requesting_user_id} attempting to remove user {user_id_to_remove} from group {group_id}")
-        
-        try:
-            # Get requesting user's role
-            requester_role = await GroupService.get_member_role(db, group_id, requesting_user_id)
-            if not requester_role:
-                raise GroupMemberNotFoundException(f"User {requesting_user_id} is not a member of group {group_id}.")
-            
-            # Only owners and admins can remove members
-            if requester_role not in [GroupMemberRole.OWNER, GroupMemberRole.ADMIN]:
-                raise UnauthorizedActionException("Only owners and admins can remove members.")
-            
-            # Get target user's membership
-            result = await db.execute(
-                select(GroupMember).where(
-                    and_(GroupMember.group_id == group_id, GroupMember.user_id == user_id_to_remove)
-                )
+
+        requester_role = await GroupService.get_member_role(db, group_id, requesting_user_id)
+        if not requester_role:
+            raise GroupMemberNotFoundException(f"User {requesting_user_id} is not a member of group {group_id}.")
+
+        if requester_role not in [GroupMemberRole.OWNER, GroupMemberRole.ADMIN]:
+            raise UnauthorizedActionException("Only owners and admins can remove members.")
+
+        result = await db.execute(
+            select(GroupMember).where(
+                and_(GroupMember.group_id == group_id, GroupMember.user_id == user_id_to_remove)
             )
-            target_member = result.scalar_one_or_none()
-            
-            if not target_member:
-                raise GroupMemberNotFoundException(f"User {user_id_to_remove} is not a member of group {group_id}.")
-            
-            # Cannot remove owner
-            if target_member.role == GroupMemberRole.OWNER:
-                raise UnauthorizedActionException("Cannot remove the group owner.")
-            
-            # Admins can only be removed by owners
-            if target_member.role == GroupMemberRole.ADMIN and requester_role != GroupMemberRole.OWNER:
-                raise UnauthorizedActionException("Only the owner can remove admins.")
-            
-            # Cannot remove yourself (use leave_group instead)
-            if user_id_to_remove == requesting_user_id:
-                raise UnauthorizedActionException("You cannot remove yourself. Use the leave group option instead.")
-            
-            await db.delete(target_member)
-            await db.commit()
-            
-            logger.info(f"User {user_id_to_remove} removed from group {group_id} by user {requesting_user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error removing member from group {group_id}: {e}", exc_info=True)
-            await db.rollback()
-            raise
+        )
+        target_member = result.scalar_one_or_none()
+        if not target_member:
+            raise GroupMemberNotFoundException(f"User {user_id_to_remove} is not a member of group {group_id}.")
+
+        if target_member.role == GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Cannot remove the group owner.")
+
+        if target_member.role == GroupMemberRole.ADMIN and requester_role != GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Only the owner can remove admins.")
+
+        if user_id_to_remove == requesting_user_id:
+            raise UnauthorizedActionException("You cannot remove yourself. Use the leave group option instead.")
+
+        await db.delete(target_member)
+        await db.commit()
+        logger.info(f"User {user_id_to_remove} removed from group {group_id} by user {requesting_user_id}")
+        return True
     
     @staticmethod
     async def update_member_role(
