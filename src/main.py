@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bot.bot import Bot
 from shared.logger import setup_logging
-from config import AUTO_MIGRATE, ENV
+from config import AUTO_MIGRATE, ENV, WEBHOOK_URL, PORT
 
 from models import ( # noqa: E402, F401
     User,
@@ -73,8 +73,14 @@ def main():
         # Database migrations on every startup
         run_alembic_migrations()
 
-        bot = Bot()
-        bot.start()
+        if WEBHOOK_URL:
+            logger.info("Starting bot in WEBHOOK mode")
+            bot = Bot(use_webhook=True)
+            bot.start_webhook(WEBHOOK_URL, PORT)
+        else:
+            logger.info("Starting bot in POLLING mode")
+            bot = Bot()
+            bot.start()
     
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")

@@ -24,3 +24,8 @@ if not DB_URL:
 AUTO_MIGRATE = os.getenv('AUTO_MIGRATE', 'false').lower() == 'true'
 
 ENV = os.getenv('ENV')
+
+# Webhook mode (production). Leave empty to use polling mode (local dev default).
+# Set WEBHOOK_URL to the full webhook URL, e.g. https://your-app.onrender.com/webhook
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+PORT = int(os.getenv('PORT', '8443'))

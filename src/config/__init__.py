@@ -3,7 +3,9 @@ from .config import (
     BOT_NAME,
     DB_URL,
     AUTO_MIGRATE,
-    ENV
+    ENV,
+    WEBHOOK_URL,
+    PORT
 )
 
 __all__ = [
@@ -11,5 +13,7 @@ __all__ = [
     "BOT_NAME",
     "DB_URL",
     "AUTO_MIGRATE",
-    "ENV"
+    "ENV",
+    "WEBHOOK_URL",
+    "PORT"
 ]

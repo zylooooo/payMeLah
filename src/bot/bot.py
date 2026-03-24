@@ -1,3 +1,5 @@
+import asyncio
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from config import BOT_API_TOKEN
@@ -28,10 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 class Bot:
-    def __init__(self):
+    def __init__(self, use_webhook: bool = False):
         logger.info("Initializing bot...")
-        # Create the application
-        self.app = Application.builder().token(BOT_API_TOKEN).build()
+        builder = Application.builder().token(BOT_API_TOKEN)
+        if use_webhook:
+            # Disable the built-in Updater so our Starlette server handles updates
+            builder = builder.updater(None)
+        self.app = builder.build()
 
         # Setup commands after the app starts
         self.app.post_init = self._setup_commands
@@ -85,8 +90,60 @@ class Bot:
         """Cleanup function called when bot shuts down."""
         await close_db()
     
+    def start_webhook(self, webhook_url: str, port: int) -> None:
+        """Start the bot in webhook mode (production)."""
+        logger.info(f"Starting bot in webhook mode on port {port}...")
+        asyncio.run(self._run_webhook(webhook_url, port))
+
+    async def _run_webhook(self, webhook_url: str, port: int) -> None:
+        """Run a Starlette web server that handles Telegram webhook updates."""
+        from starlette.applications import Starlette
+        from starlette.requests import Request
+        from starlette.responses import PlainTextResponse, Response
+        from starlette.routing import Route
+        import uvicorn
+
+        ptb_app = self.app
+
+        async def health(_: Request) -> PlainTextResponse:
+            return PlainTextResponse("OK")
+
+        async def webhook(request: Request) -> Response:
+            """Put the incoming Telegram update onto PTB's internal queue."""
+            await ptb_app.update_queue.put(
+                Update.de_json(data=await request.json(), bot=ptb_app.bot)
+            )
+            return Response()
+
+        starlette_app = Starlette(
+            routes=[
+                Route("/health", health, methods=["GET"]),
+                Route("/webhook", webhook, methods=["POST"]),
+            ]
+        )
+
+        server = uvicorn.Server(
+            config=uvicorn.Config(
+                app=starlette_app,
+                port=port,
+                host="0.0.0.0",
+                use_colors=False,
+            )
+        )
+
+        async with ptb_app:
+            await ptb_app.start()
+            await ptb_app.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+            )
+            logger.info(f"Webhook registered at: {webhook_url}")
+            await server.serve()
+            await ptb_app.stop()
+
     def start(self):
-        """Start the bot in polling mode."""
+        """Start the bot in polling mode (local development)."""
         logger.info("Starting bot in polling mode...")
         try:
             self.app.run_polling(
