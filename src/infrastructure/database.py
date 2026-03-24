@@ -1,3 +1,4 @@
+import re
 from config import DB_URL
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
@@ -9,10 +10,33 @@ logger = logging.getLogger(__name__)
 # Base class for all models
 Base = declarative_base()
 
+
+def _prepare_asyncpg_url(db_url: str) -> tuple[str, dict]:
+    """
+    asyncpg does not accept libpq parameters like 'sslmode' or 'channel_binding'.
+    Strip them from the URL and map SSL requirement to asyncpg's native connect_arg.
+    This only applies to the asyncpg runtime engine; Alembic uses psycopg2 separately.
+    """
+    requires_ssl = bool(
+        re.search(r'[?&]sslmode=require', db_url)
+        or re.search(r'[?&]ssl=require', db_url)
+    )
+    clean_url = re.sub(r'[?&]sslmode=[^&]*', '', db_url)
+    clean_url = re.sub(r'[?&]channel_binding=[^&]*', '', clean_url)
+    clean_url = re.sub(r'[?&]ssl=[^&]*', '', clean_url)
+    clean_url = re.sub(r'\?&', '?', clean_url)
+    clean_url = clean_url.rstrip('?').rstrip('&')
+    connect_args = {"ssl": True} if requires_ssl else {}
+    return clean_url, connect_args
+
+
+_asyncpg_url, _connect_args = _prepare_asyncpg_url(DB_URL)
+
 # Create an async engine for the database
 async_engine = create_async_engine(
-    DB_URL,
+    _asyncpg_url,
     pool_pre_ping=True,
+    connect_args=_connect_args,
     echo=False
 )
 

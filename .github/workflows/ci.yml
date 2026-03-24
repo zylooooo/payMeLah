@@ -38,3 +38,12 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t paymelah-bot .
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Trigger Render deployment
+        run: curl -f "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
