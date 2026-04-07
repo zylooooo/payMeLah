@@ -70,6 +70,11 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not telegram_chat_id:
             logger.warning("Received /groups command without telegram chat ID")
             return
+
+        telegram_user = update.effective_user
+        if not telegram_user:
+            logger.warning("Received /groups command without telegram user information")
+            return
         
         logger.info(f"Showing expense groups for Telegram chat ID: {telegram_chat_id}")
         
