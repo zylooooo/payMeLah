@@ -490,7 +490,7 @@ def _format_group_balances_message(balances: dict) -> str:
                 to_user = members_lookup.get(debt['to_user_id'], {})
                 from_name = _get_display_name(from_user) if from_user else f"User {debt['from_user_id']}"
                 to_name = _get_display_name(to_user) if to_user else f"User {debt['to_user_id']}"
-                message += f"  {from_name} -> {to_name}: {_format_amount(debt['amount'], currency)}\n"
+                message += f"  {from_name} ---> {to_name}: {_format_amount(debt['amount'], currency)}\n"
 
     # Multi-currency breakdown (only shown when group has expenses in multiple currencies)
     per_currency = balances.get('per_currency_totals', {})
