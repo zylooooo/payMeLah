@@ -27,14 +27,13 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - If the command is used in a group chat, it will show all the groups that is associated with the group chat.
     """
     chat_type = update.effective_chat.type
+    telegram_user = update.effective_user
+    if not telegram_user:
+        logger.warning("Received /groups command without telegram user information")
+        return
 
     if chat_type == "private":
         logger.info("Showing list of groups that user is a member of in a private chat.")
-        telegram_user = update.effective_user
-        if not telegram_user:
-            logger.warning("Received /groups command without telegram user information")
-            return
-        
         try:
             async with get_db() as db:
                 groups = await GroupService.get_all_groups_by_user_id(db, telegram_user.id)
@@ -71,11 +70,6 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("Received /groups command without telegram chat ID")
             return
 
-        telegram_user = update.effective_user
-        if not telegram_user:
-            logger.warning("Received /groups command without telegram user information")
-            return
-        
         logger.info(f"Showing expense groups for Telegram chat ID: {telegram_chat_id}")
         
         try:
