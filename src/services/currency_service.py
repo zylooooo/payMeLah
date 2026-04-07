@@ -8,7 +8,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL = timedelta(hours=1)
-_API_BASE = "https://api.frankfurter.app"
+# Frankfurter moved from api.frankfurter.app → api.frankfurter.dev (see https://frankfurter.dev/)
+_API_BASE = "https://api.frankfurter.dev/v1"
 
 # In-memory rate cache: {base_currency: {'rates': {target: float, ...}, 'fetched_at': datetime}}
 _rate_cache: Dict[str, dict] = {}
@@ -16,7 +17,7 @@ _rate_cache: Dict[str, dict] = {}
 
 class CurrencyService:
     """
-    Fetches live exchange rates from frankfurter.app (ECB data, no API key required).
+    Fetches live exchange rates from Frankfurter (ECB data, no API key required).
     Rates are cached in-memory for 1 hour to avoid unnecessary network calls.
     """
 
@@ -91,9 +92,9 @@ class CurrencyService:
 
     @classmethod
     async def _fetch_rates(cls, base: str) -> dict:
-        """Hit frankfurter.app and return the rates dict."""
+        """Hit Frankfurter API and return the rates dict."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
                 response = await client.get(
                     f"{_API_BASE}/latest",
                     params={'from': base}
