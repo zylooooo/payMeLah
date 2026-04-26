@@ -506,11 +506,6 @@ class ExpenseService:
             logger.debug(f"User {requesting_user_id} is neither creator nor payer of expense {expense_id}")
             return False, "You can only modify expenses you created or paid for."
         
-        # Check if expense is fully settled
-        if expense.is_settled:
-            logger.debug(f"Expense {expense_id} is fully settled")
-            return False, "Cannot modify a fully settled expense."
-        
         # Check if any non-payer participant has settled
         result = await db.execute(
             select(ExpenseParticipant).where(
@@ -633,11 +628,13 @@ class ExpenseService:
         amount_changed = 'amount' in update_data and update_data['amount'] != expense.amount
         participants_changed = 'participant_ids' in update_data
         split_type_changed = 'split_type' in update_data and update_data['split_type'] != expense.split_type
-        
+        payer_changed = 'payer_id' in update_data and update_data['payer_id'] != expense.payer_id
+
         # Determine the values to use for recalculation
         new_amount = update_data.get('amount', expense.amount)
         new_split_type = update_data.get('split_type', expense.split_type)
         new_payer_id = update_data.get('payer_id', expense.payer_id)
+        old_payer_id = expense.payer_id
         
         # Validate payer is a group member if changing
         if 'payer_id' in update_data:
@@ -691,19 +688,19 @@ class ExpenseService:
             # Recalculate shares for existing participants
             current_participant_ids = [p.user_id for p in expense.participants]
             split_data = update_data.get('split_data')
-            
+
             shares = ExpenseService._calculate_shares(
                 amount=new_amount,
                 split_type=new_split_type,
                 participant_ids=current_participant_ids,
                 split_data=split_data
             )
-            
+
             # Get split percentages if applicable
             split_percentages = None
             if new_split_type == ExpenseSplitType.PERCENTAGE and split_data:
                 split_percentages = split_data.get('percentages')
-            
+
             # Update each participant's share
             for i, participant in enumerate(expense.participants):
                 participant.share_amount = shares[i]
@@ -711,7 +708,27 @@ class ExpenseService:
                     participant.split_percentage = split_percentages[i]
                 elif new_split_type != ExpenseSplitType.PERCENTAGE:
                     participant.split_percentage = None
-        
+
+            # If payer also changed, re-assign is_settled on existing participants
+            if payer_changed:
+                for participant in expense.participants:
+                    if participant.user_id == new_payer_id:
+                        participant.is_settled = True
+                        participant.settled_at = datetime.now(timezone.utc)
+                    elif participant.user_id == old_payer_id:
+                        participant.is_settled = False
+                        participant.settled_at = None
+
+        elif payer_changed:
+            # Only the payer changed — re-assign is_settled flags without touching shares
+            for participant in expense.participants:
+                if participant.user_id == new_payer_id:
+                    participant.is_settled = True
+                    participant.settled_at = datetime.now(timezone.utc)
+                elif participant.user_id == old_payer_id:
+                    participant.is_settled = False
+                    participant.settled_at = None
+
         # Update simple fields
         if 'description' in update_data:
             expense.description = update_data['description']

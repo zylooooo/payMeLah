@@ -345,8 +345,8 @@ class ExpenseKeyboard:
             ],
             [
                 InlineKeyboardButton(
-                    "X Cancel",
-                    callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+                    "<< Back",
+                    callback_data=cls._build_callback_data(cls.ACTION_VIEW_DETAILS, str(expense_id))
                 )
             ]
         ])

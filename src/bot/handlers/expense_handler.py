@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackQueryHandler
 from typing import List, Optional
 from infrastructure import get_db
@@ -202,20 +202,16 @@ def _format_expense_details(expense: dict, participants: list, payer_name: Optio
 
 def _cleanup_expense_view_data(context: ContextTypes.DEFAULT_TYPE, is_group_chat: bool = False):
     """Clean up view-related context data."""
+    keys = [
+        'expense_view_groups',
+        'expense_view_group_id',
+        'expense_view_group_name',
+        'expense_view_current_page',
+    ]
     if is_group_chat:
-        keys = [
-            'expense_view_groups',
-            'expense_view_group_id',
-            'expense_view_group_name'
-        ]
         for key in keys:
             context.chat_data.pop(key, None)
     else:
-        keys = [
-            'expense_view_groups',
-            'expense_view_group_id',
-            'expense_view_group_name'
-        ]
         for key in keys:
             context.user_data.pop(key, None)
 
@@ -332,13 +328,19 @@ async def _show_expense_list(
                     if user:
                         payer_names[payer_id] = user.get('first_name') or user.get('username') or f"User {payer_id}"
         
+        # Store current page so back-navigation can restore it
+        if is_group_chat:
+            context.chat_data['expense_view_current_page'] = page
+        else:
+            context.user_data['expense_view_current_page'] = page
+
         # Check if we should show back to groups button
         if is_group_chat:
             groups = context.chat_data.get('expense_view_groups', [])
         else:
             groups = context.user_data.get('expense_view_groups', [])
         show_back_to_groups = len(groups) > 1
-        
+
         # Format message with payer names
         message = _format_expense_list_message(expenses, group_name, payer_names, page, total_count)
         
@@ -614,10 +616,12 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                 # Get group name from context
                 if is_group_chat:
                     group_name = context.chat_data.get('expense_view_group_name', 'Group')
+                    saved_page = context.chat_data.get('expense_view_current_page', 0)
                 else:
                     group_name = context.user_data.get('expense_view_group_name', 'Group')
-                
-                await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat)
+                    saved_page = context.user_data.get('expense_view_current_page', 0)
+
+                await _show_expense_list(update, context, group_id, group_name, page=saved_page, is_group_chat=is_group_chat)
             except ValueError:
                 await query.edit_message_text("Invalid group ID.")
         else:
@@ -679,34 +683,33 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
         if not data:
             await query.edit_message_text("Invalid expense selection.")
             return
-        
+
         try:
             expense_id = int(data)
-            
+
             # Get group_id before deletion for navigation
             async with get_db() as db:
                 expense_data = await ExpenseService.get_expense_by_id(db, expense_id)
                 group_id = expense_data.get('group_id')
-                
+
                 # Perform deletion
                 await ExpenseService.delete_expense(db, expense_id, telegram_user.id)
-            
+
             logger.info(f"User {telegram_user.id} deleted expense {expense_id}")
-            
-            # Get group name for navigation back to list
-            if is_group_chat:
-                group_name = context.chat_data.get('expense_view_group_name', 'Group')
-            else:
-                group_name = context.user_data.get('expense_view_group_name', 'Group')
-            
+
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "<< Back to list",
+                    callback_data=ExpenseKeyboard._build_callback_data(
+                        ExpenseKeyboard.ACTION_BACK_TO_LIST, str(group_id)
+                    )
+                )
+            ]])
             await query.edit_message_text(
                 "Expense deleted successfully.",
-                parse_mode="HTML"
+                reply_markup=keyboard
             )
-            
-            # After a brief moment, we could show the list again
-            # For now, user can use /expenses to see updated list
-            
+
         except ExpenseNotFoundException:
             await query.edit_message_text("Expense not found. It may have already been deleted.")
         except UnauthorizedActionException as e:

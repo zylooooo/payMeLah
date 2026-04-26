@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -34,6 +34,16 @@ logger = logging.getLogger(__name__)
 
 ERROR_MSG = "An unexpected error has occurred while editing the expense. Please try again later."
 CONVERSATION_TIMEOUT = 600  # 10 minutes
+
+FIELD_LABELS = {
+    'description': 'Description',
+    'amount': 'Amount',
+    'currency': 'Currency',
+    'expense_date': 'Date',
+    'payer_id': 'Payer',
+    'participant_ids': 'Participants',
+    'split_type': 'Split type',
+}
 
 
 # ===================================================================================
@@ -247,15 +257,38 @@ async def _show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Show pending changes if any
     if changes:
+        members = context.user_data.get('edit_group_members', [])
         change_lines = []
         for field, new_value in changes.items():
+            if field == 'split_data':
+                continue
             old_value = original.get(field)
-            if field == 'split_type' and hasattr(new_value, 'value'):
-                new_value = new_value.value
-            if field == 'split_type' and hasattr(old_value, 'value'):
-                old_value = old_value.value
-            change_lines.append(f"  {field}: {old_value} -> {new_value}")
-        
+            label = FIELD_LABELS.get(field, field)
+
+            if field == 'split_type':
+                new_value = new_value.value if hasattr(new_value, 'value') else new_value
+                old_value = old_value.value if hasattr(old_value, 'value') else old_value
+            elif field == 'payer_id':
+                old_m = next((m for m in members if m.get('user_id') == old_value), {})
+                new_m = next((m for m in members if m.get('user_id') == new_value), {})
+                old_value = _get_member_display_name(old_m) if old_m else old_value
+                new_value = _get_member_display_name(new_m) if new_m else new_value
+            elif field == 'participant_ids':
+                old_names = [
+                    _get_member_display_name(next((m for m in members if m.get('user_id') == p['user_id']), {}))
+                    for p in original.get('participants', [])
+                ]
+                new_names = [
+                    _get_member_display_name(next((m for m in members if m.get('user_id') == pid), {}))
+                    for pid in new_value
+                ]
+                old_value = ", ".join(old_names) or "—"
+                new_value = ", ".join(new_names) or "—"
+            elif field == 'expense_date' and hasattr(new_value, 'isoformat'):
+                new_value = new_value.isoformat()
+
+            change_lines.append(f"  {label}: {old_value} → {new_value}")
+
         message += "\n\n<b>Pending changes:</b>\n" + "\n".join(change_lines)
     
     keyboard = ExpenseKeyboard.get_edit_menu_keyboard(has_changes=_has_changes(context))
@@ -1062,36 +1095,34 @@ async def _show_edit_summary(update: Update, context: ContextTypes.DEFAULT_TYPE)
     change_lines = []
     for field, new_value in changes.items():
         if field == 'split_data':
-            continue  # Don't show raw split data
-        
+            continue
+
         old_value = original.get(field)
-        
-        # Format display values
+        label = FIELD_LABELS.get(field, field)
+
         if field == 'split_type':
-            if hasattr(new_value, 'value'):
-                new_value = new_value.value.title()
-            if hasattr(old_value, 'value'):
-                old_value = old_value.value.title()
+            new_value = new_value.value.title() if hasattr(new_value, 'value') else str(new_value).title()
+            old_value = old_value.value.title() if hasattr(old_value, 'value') else str(old_value).title()
         elif field == 'payer_id':
             old_member = next((m for m in members if m.get('user_id') == old_value), {})
             new_member = next((m for m in members if m.get('user_id') == new_value), {})
             old_value = _get_member_display_name(old_member) if old_member else old_value
             new_value = _get_member_display_name(new_member) if new_member else new_value
         elif field == 'participant_ids':
-            old_names = []
-            for p in original.get('participants', []):
-                member = next((m for m in members if m.get('user_id') == p['user_id']), {})
-                old_names.append(_get_member_display_name(member) if member else str(p['user_id']))
-            new_names = []
-            for pid in new_value:
-                member = next((m for m in members if m.get('user_id') == pid), {})
-                new_names.append(_get_member_display_name(member) if member else str(pid))
-            old_value = ", ".join(old_names)
-            new_value = ", ".join(new_names)
+            old_names = [
+                _get_member_display_name(next((m for m in members if m.get('user_id') == p['user_id']), {}))
+                for p in original.get('participants', [])
+            ]
+            new_names = [
+                _get_member_display_name(next((m for m in members if m.get('user_id') == pid), {}))
+                for pid in new_value
+            ]
+            old_value = ", ".join(old_names) or "—"
+            new_value = ", ".join(new_names) or "—"
         elif field == 'expense_date' and hasattr(new_value, 'isoformat'):
             new_value = new_value.isoformat()
-        
-        change_lines.append(f"  {field}: {old_value} -> {new_value}")
+
+        change_lines.append(f"  {label}: {old_value} → {new_value}")
     
     # Calculate new breakdown
     amount = changes.get('amount', original.get('amount'))
@@ -1185,17 +1216,25 @@ async def _save_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 changes,
                 telegram_user.id
             )
-        
+
         logger.info(f"User {telegram_user.id} updated expense {expense_id}")
-        
-        await query.edit_message_text(
-            "<b>Expense Updated!</b>\n\n"
-            "Your changes have been saved successfully.\n\n"
-            "Use /expenses to view the updated expense.",
-            parse_mode="HTML"
-        )
-        
+
         _cleanup_conversation(context)
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "View expense",
+                callback_data=ExpenseKeyboard._build_callback_data(
+                    ExpenseKeyboard.ACTION_VIEW_DETAILS, str(expense_id)
+                )
+            )
+        ]])
+        await query.edit_message_text(
+            "<b>Expense updated!</b>\n\nYour changes have been saved.",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+
         return ConversationHandler.END
     
     except ExpenseNotFoundException:
@@ -1217,15 +1256,29 @@ async def _save_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # ===================================================================================
 async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel expense editing."""
+    expense_id = context.user_data.get('edit_expense_id')
+    _cleanup_conversation(context)
+
+    keyboard = None
+    if expense_id:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "Back to expense",
+                callback_data=ExpenseKeyboard._build_callback_data(
+                    ExpenseKeyboard.ACTION_VIEW_DETAILS, str(expense_id)
+                )
+            )
+        ]])
+
     message = "Edit cancelled. No changes were saved."
-    
     if update.callback_query:
-        await update.callback_query.edit_message_text(message)
+        await update.callback_query.edit_message_text(
+            message, reply_markup=keyboard
+        )
     else:
         await _cleanup_previous_keyboard(update, context)
-        await update.message.reply_text(message)
-    
-    _cleanup_conversation(context)
+        await update.message.reply_text(message, reply_markup=keyboard)
+
     return ConversationHandler.END
 
 
