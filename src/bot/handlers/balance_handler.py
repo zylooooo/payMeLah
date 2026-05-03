@@ -347,7 +347,8 @@ async def _show_group_balances(
                 db, group_id, user_id, simplify=simplify
             )
 
-            message = _format_group_balances_message(balances)
+            is_private = (update.effective_chat.type == "private") if update.effective_chat else False
+            message = _format_group_balances_message(balances, is_private=is_private)
             has_debts = len(balances['debts']) > 0
             keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
 
@@ -443,7 +444,7 @@ async def _show_user_balance(
     return None
 
 
-def _format_group_balances_message(balances: dict) -> str:
+def _format_group_balances_message(balances: dict, is_private: bool = False) -> str:
     """Format the group balances message."""
     group = balances['group']
     members = balances['members']
@@ -506,6 +507,24 @@ def _format_group_balances_message(balances: dict) -> str:
             message += f"  → Total ({h(currency)}): {_format_amount(total_spend, currency)}\n"
         else:
             message += f"\n<b>Total Group Spend:</b> {_format_amount(total_spend, currency)}\n"
+
+    requesting_user_stats = balances.get('requesting_user_stats')
+    if is_private and requesting_user_stats:
+        net_balance = requesting_user_stats['net_balance']
+        total_paid = requesting_user_stats['total_paid']
+        total_share = requesting_user_stats['total_share']
+        message += "\n<b>My Stats:</b>\n"
+        message += f"  My expenses:             {_format_amount(total_share, currency)}\n"
+        message += f"  Total amount paid first: {_format_amount(total_paid, currency)}\n"
+        if net_balance > 0:
+            message += f"  My balance:              +{_format_amount(net_balance, currency)}\n"
+        elif net_balance < 0:
+            message += f"  My balance:              -{_format_amount(abs(net_balance), currency)}\n"
+        else:
+            message += "  My balance:              Settled up\n"
+    elif not is_private:
+        # Group chat always shows the hint — personal stats are only visible in private chat
+        message += "\n💡 <i>Send me a private message to check your personal balance for this group.</i>\n"
 
     return message
 
@@ -646,7 +665,7 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer("Session expired. Please try again.", show_alert=True)
         return
 
-    chat_type = update.effective_chat.type if update.effective_chat else "private"
+    chat_type = update.effective_chat.type if update.effective_chat else "group"
     is_private = chat_type == "private"
 
     # In group chats, only the user who triggered the command can interact with the keyboard
@@ -665,7 +684,7 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if action == BalanceKeyboard.ACTION_TOGGLE_SIMPLIFY:
-        await _handle_toggle_simplify(query, context, data, telegram_user.id)
+        await _handle_toggle_simplify(query, context, data, telegram_user.id, is_private=is_private)
         return
 
     # For pagination, validate context data exists before answering
@@ -687,7 +706,7 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
 
     if action == BalanceKeyboard.ACTION_SELECT_GROUP:
-        await _handle_group_selection(query, context, data, telegram_user.id)
+        await _handle_group_selection(query, context, data, telegram_user.id, is_private=is_private)
         return
 
     if action in [BalanceKeyboard.ACTION_NEXT, BalanceKeyboard.ACTION_PREV]:
@@ -695,7 +714,7 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if action == BalanceKeyboard.ACTION_REFRESH:
-        await _handle_refresh(query, context, data, telegram_user.id)
+        await _handle_refresh(query, context, data, telegram_user.id, is_private=is_private)
         return
 
     if action == BalanceKeyboard.ACTION_BACK_TO_LIST:
@@ -711,7 +730,8 @@ async def _handle_group_selection(
     query,
     context: ContextTypes.DEFAULT_TYPE,
     data: str,
-    user_id: int
+    user_id: int,
+    is_private: bool = False
 ) -> None:
     """Handle group selection for viewing balances."""
     if not data or ':' not in data:
@@ -729,7 +749,7 @@ async def _handle_group_selection(
                 balances = await BalanceService.get_group_balances(
                     db, group_id, user_id, simplify=simplify
                 )
-                message = _format_group_balances_message(balances)
+                message = _format_group_balances_message(balances, is_private=is_private)
                 has_debts = len(balances['debts']) > 0
                 keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
             else:
@@ -809,7 +829,8 @@ async def _handle_refresh(
     query,
     context: ContextTypes.DEFAULT_TYPE,
     data: str,
-    user_id: int
+    user_id: int,
+    is_private: bool = False
 ) -> None:
     """Handle refresh of balance view."""
     if data == "total":
@@ -855,7 +876,7 @@ async def _handle_refresh(
                 balances = await BalanceService.get_group_balances(
                     db, group_id, user_id, simplify=simplify
                 )
-                message = _format_group_balances_message(balances)
+                message = _format_group_balances_message(balances, is_private=is_private)
                 has_debts = len(balances['debts']) > 0
                 keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
             else:  # user
@@ -891,7 +912,8 @@ async def _handle_toggle_simplify(
     query,
     context: ContextTypes.DEFAULT_TYPE,
     data: str,
-    user_id: int
+    user_id: int,
+    is_private: bool = False
 ) -> None:
     """Toggle between simplified and raw debt view, then refresh."""
     if not data or ':' not in data:
@@ -914,7 +936,7 @@ async def _handle_toggle_simplify(
                 balances = await BalanceService.get_group_balances(
                     db, group_id, user_id, simplify=new_simplify
                 )
-                message = _format_group_balances_message(balances)
+                message = _format_group_balances_message(balances, is_private=is_private)
                 has_debts = len(balances['debts']) > 0
                 keyboard = BalanceKeyboard.get_group_balances_keyboard(
                     group_id, has_debts, is_simplified=new_simplify

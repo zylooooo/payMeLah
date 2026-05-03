@@ -40,9 +40,11 @@ class BalanceService:
             simplify: If True, apply min-transactions simplification to debts.
 
         Returns:
-            Dict with keys: group, members, debts, currency.
+            Dict with keys: group, members, debts, currency, conversion_warnings,
+            total_spend, per_currency_totals, requesting_user_stats.
             members: sorted list of {user_id, username, first_name, last_name, balance}.
             debts: list of {from_user_id, to_user_id, amount} — simplified or raw.
+            requesting_user_stats: {total_paid, total_share, net_balance} for the requesting user.
 
         Raises:
             GroupNotFoundException, UnauthorizedActionException.
@@ -104,6 +106,16 @@ class BalanceService:
         per_currency_totals = await BalanceService._get_per_currency_totals(db, group_id)
         conversion_warnings = list(dict.fromkeys(conversion_warnings + spend_warnings))
 
+        user_paid, user_share, user_spend_warnings = await BalanceService._calculate_user_spend_stats(
+            db, group_id, requesting_user_id, group_currency
+        )
+        requesting_user_stats = {
+            'total_paid': user_paid,
+            'total_share': user_share,
+            'net_balance': member_balances.get(requesting_user_id, Decimal('0')),
+        }
+        conversion_warnings = list(dict.fromkeys(conversion_warnings + user_spend_warnings))
+
         logger.info(f"Calculated balances for group {group_id}: {len(debts_list)} debt(s)")
         return {
             'group': group,
@@ -113,6 +125,7 @@ class BalanceService:
             'conversion_warnings': conversion_warnings,
             'total_spend': total_spend,
             'per_currency_totals': per_currency_totals,
+            'requesting_user_stats': requesting_user_stats,
         }
 
     @staticmethod
@@ -171,12 +184,9 @@ class BalanceService:
                     'amount': debt['amount']
                 })
 
-        total_paid, total_share, spend_warnings = await BalanceService._calculate_user_spend_stats(
-            db, group_id, user_id, group_balances['currency']
-        )
-        all_warnings = list(dict.fromkeys(
-            group_balances.get('conversion_warnings', []) + spend_warnings
-        ))
+        stats = group_balances.get('requesting_user_stats') or {}
+        total_paid = stats.get('total_paid', Decimal('0'))
+        total_share = stats.get('total_share', Decimal('0'))
 
         return {
             'group': group_balances['group'],
@@ -184,7 +194,7 @@ class BalanceService:
             'owes_to': owes_to,
             'owed_by': owed_by,
             'currency': group_balances['currency'],
-            'conversion_warnings': all_warnings,
+            'conversion_warnings': group_balances.get('conversion_warnings', []),
             'total_paid': total_paid,
             'total_share': total_share,
             'total_spend': group_balances.get('total_spend', Decimal('0')),

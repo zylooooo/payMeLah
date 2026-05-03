@@ -217,6 +217,7 @@ payMeLah/
 
 # Claude
 .claude/
+docs/superpowers/*
 
 # Alembic
 # Note: Migration files in alembic/versions/*.py SHOULD be tracked
