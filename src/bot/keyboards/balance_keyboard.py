@@ -235,28 +235,6 @@ class BalanceKeyboard:
 
         return InlineKeyboardMarkup(buttons)
 
-    @classmethod
-    def get_total_balances_keyboard(cls) -> InlineKeyboardMarkup:
-        """Generate keyboard for total balances view."""
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    "Refresh",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_REFRESH,
-                        "total"
-                    )
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "X Close",
-                    callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
-                )
-            ]
-        ]
-
-        return InlineKeyboardMarkup(buttons)
 
     @classmethod
     def get_close_keyboard(cls) -> InlineKeyboardMarkup:

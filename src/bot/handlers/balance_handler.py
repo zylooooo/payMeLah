@@ -286,47 +286,6 @@ async def mybalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(ERROR_MSG)
 
 
-@rate_limit
-@validate_chat_type("private")
-async def mytotal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /mytotal command handler.
-    Shows the user's total balances across all groups.
-    Only available in private chat.
-    """
-    telegram_user = update.effective_user
-
-    if not telegram_user:
-        logger.warning("Received /mytotal command without telegram user")
-        return
-
-    logger.info(f"User {telegram_user.id} requested total balances")
-
-    try:
-        async with get_db() as db:
-            total_balances = await BalanceService.get_user_total_balances(
-                db, telegram_user.id
-            )
-
-            if not total_balances['groups']:
-                await update.message.reply_text(
-                    "You are not a member of any groups yet.\n"
-                    "Join or create a group to start tracking balances!"
-                )
-                return
-
-            message = _format_total_balances_message(total_balances)
-            keyboard = BalanceKeyboard.get_total_balances_keyboard()
-
-            await update.message.reply_text(
-                message,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
-    except Exception as e:
-        logger.error(f"Error in mytotal command: {e}", exc_info=True)
-        await update.message.reply_text(ERROR_MSG)
-
 
 async def _show_group_balances(
     update: Update,
@@ -539,73 +498,6 @@ def _format_user_balance_message(balance: dict) -> str:
     return message
 
 
-def _format_total_balances_message(total_balances: dict) -> str:
-    """Format the total balances message."""
-    groups = total_balances['groups']
-    total_owed = total_balances['total_owed']
-    total_owes = total_balances['total_owes']
-    preferred_currency = total_balances.get('preferred_currency', 'SGD')
-    preferred_total = total_balances.get('preferred_total', {})
-
-    message = "<b>My Total Balances</b>\n\n"
-
-    # Per-currency breakdown
-    if total_owed or total_owes:
-        message += "<b>Overall Summary (by currency):</b>\n"
-        all_currencies = set(total_owed.keys()) | set(total_owes.keys())
-
-        for currency in sorted(all_currencies):
-            owed = total_owed.get(currency, Decimal('0'))
-            owes = total_owes.get(currency, Decimal('0'))
-            net = owed - owes
-
-            if net > 0:
-                message += f"  {currency}: You are owed {_format_amount(net, currency)}\n"
-            elif net < 0:
-                message += f"  {currency}: You owe {_format_amount(abs(net), currency)}\n"
-            else:
-                message += f"  {currency}: Settled up\n"
-        message += "\n"
-
-    # Converted grand total in preferred currency
-    p_owed = preferred_total.get('owed', Decimal('0'))
-    p_owes = preferred_total.get('owes', Decimal('0'))
-    p_net = p_owed - p_owes
-    p_failed = preferred_total.get('conversion_failed', False)
-
-    message += f"<b>Total ({preferred_currency}):</b>\n"
-    if p_net > 0:
-        message += f"  You are owed ~{_format_amount(p_net, preferred_currency)}\n"
-    elif p_net < 0:
-        message += f"  You owe ~{_format_amount(abs(p_net), preferred_currency)}\n"
-    else:
-        message += "  All settled up\n"
-
-    if p_failed:
-        message += (
-            f"  ⚠️ <i>Some balances could not be converted to {preferred_currency}. "
-            "Total may be incomplete.</i>\n"
-        )
-    message += "\n"
-
-    # Per-group breakdown
-    message += "<b>By Group:</b>\n"
-    for group_balance in groups:
-        group_name = group_balance['group_name']
-        currency = group_balance['currency']
-        net = group_balance['net_balance']
-
-        if net > 0:
-            status = f"owed {_format_amount(net, currency)}"
-        elif net < 0:
-            status = f"owe {_format_amount(abs(net), currency)}"
-        else:
-            status = "settled"
-
-        message += f"  <b>{h(group_name)}</b>: {status}\n"
-
-    return message
-
 
 async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from balance keyboards."""
@@ -785,34 +677,6 @@ async def _handle_refresh(
     is_private: bool = False
 ) -> None:
     """Handle refresh of balance view."""
-    if data == "total":
-        # Refresh total balances
-        try:
-            async with get_db() as db:
-                total_balances = await BalanceService.get_user_total_balances(
-                    db, user_id
-                )
-                message = _format_total_balances_message(total_balances)
-                keyboard = BalanceKeyboard.get_total_balances_keyboard()
-
-                await query.edit_message_text(
-                    message,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
-                await query.answer("Refreshed!")
-        except BadRequest as e:
-            # Handle "message is not modified" error gracefully
-            if "message is not modified" in str(e).lower():
-                await query.answer("Already up to date!")
-            else:
-                logger.error(f"Error refreshing total balances: {e}", exc_info=True)
-                await query.answer("Failed to refresh. Please try again.", show_alert=True)
-        except Exception as e:
-            logger.error(f"Error refreshing total balances: {e}", exc_info=True)
-            await query.answer("Failed to refresh. Please try again.", show_alert=True)
-        return
-
     if ':' not in data:
         await query.answer("Invalid refresh data.", show_alert=True)
         return

@@ -16,8 +16,7 @@ PRIVATE_COMMANDS = [
     BotCommand(command="addexpense", description="Add a new expense to an existing expense group"),
     BotCommand(command="expenses", description="View expenses in your groups"),
     BotCommand(command="balances", description="View all balances in a group"),
-    BotCommand(command="mybalance", description="View your balance in a group"),
-    BotCommand(command="mytotal", description="View your total balances across all groups")
+    BotCommand(command="mybalance", description="View your balance in a group")
 ]
 
 GROUP_COMMANDS = [

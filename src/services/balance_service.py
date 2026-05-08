@@ -6,7 +6,6 @@ from shared import (
     UnauthorizedActionException
 )
 from .group_service import GroupService
-from .user_service import UserService
 from .currency_service import CurrencyService
 from typing import Dict, List, Tuple
 from decimal import Decimal
@@ -197,89 +196,6 @@ class BalanceService:
             'total_paid': total_paid,
             'total_share': total_share,
             'total_spend': group_balances.get('total_spend', Decimal('0')),
-        }
-
-    @staticmethod
-    async def get_user_total_balances(
-        db: AsyncSession,
-        user_id: int
-    ) -> Dict[str, any]:
-        """
-        Get a user's total balances across all groups.
-        Always uses simplified debts (summary view).
-
-        Returns:
-            Dict with keys: groups, total_owed (by currency), total_owes (by currency),
-            preferred_currency, preferred_total (converted grand total).
-        """
-        logger.info(f"Getting total balances for user {user_id}")
-
-        groups = await GroupService.get_all_groups_by_user_id(db, user_id)
-        if not groups:
-            return {
-                'groups': [], 'total_owed': {}, 'total_owes': {},
-                'preferred_currency': 'SGD',
-                'preferred_total': {'owed': Decimal('0'), 'owes': Decimal('0'), 'conversion_failed': False}
-            }
-
-        user = await UserService.get_user_by_id(db, user_id)
-        preferred_currency = user.get('preferred_currency', 'SGD') if user else 'SGD'
-
-        group_balances = []
-        total_owed_by_currency = defaultdict(Decimal)
-        total_owes_by_currency = defaultdict(Decimal)
-        preferred_owed = Decimal('0')
-        preferred_owes = Decimal('0')
-        conversion_failed = False
-
-        for group in groups:
-            try:
-                balance = await BalanceService.get_user_balance_in_group(
-                    db, group['id'], user_id, simplify=True
-                )
-                currency = balance['currency']
-                net = balance['net_balance']
-
-                group_balances.append({
-                    'group_id': group['id'],
-                    'group_name': group['name'],
-                    'currency': currency,
-                    'net_balance': net,
-                    'owes_to': balance['owes_to'],
-                    'owed_by': balance['owed_by']
-                })
-
-                if net > 0:
-                    total_owed_by_currency[currency] += net
-                elif net < 0:
-                    total_owes_by_currency[currency] += abs(net)
-
-                # Contribute to the preferred-currency grand total
-                if net != 0:
-                    try:
-                        converted = await CurrencyService.convert(abs(net), currency, preferred_currency)
-                        if net > 0:
-                            preferred_owed += converted
-                        else:
-                            preferred_owes += converted
-                    except ValueError:
-                        conversion_failed = True
-
-            except Exception as e:
-                logger.warning(f"Error getting balance for group {group['id']}: {e}")
-                continue
-
-        logger.info(f"Calculated total balances for user {user_id}")
-        return {
-            'groups': group_balances,
-            'total_owed': dict(total_owed_by_currency),
-            'total_owes': dict(total_owes_by_currency),
-            'preferred_currency': preferred_currency,
-            'preferred_total': {
-                'owed': preferred_owed,
-                'owes': preferred_owes,
-                'conversion_failed': conversion_failed,
-            },
         }
 
     @staticmethod

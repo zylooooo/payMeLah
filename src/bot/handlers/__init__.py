@@ -6,7 +6,6 @@ from .expense_handler import expenses_command, handle_expense_view_callback, cre
 from .balance_handler import (
     balances_command,
     mybalance_command,
-    mytotal_command,
     handle_balance_callback,
     create_balance_callback_handler
 )
@@ -23,7 +22,6 @@ __all__ = [
     "create_expense_view_callback_handler",
     "balances_command",
     "mybalance_command",
-    "mytotal_command",
     "handle_balance_callback",
     "create_balance_callback_handler"
 ]
