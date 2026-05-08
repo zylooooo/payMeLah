@@ -4,7 +4,7 @@ from typing import List
 from infrastructure import get_db
 from services import GroupService
 from bot.keyboards import GroupKeyboard
-from bot.utils import validate_chat_type, h, rate_limit
+from bot.utils import validate_chat_type, h, rate_limit, ERROR_MSG, get_display_name
 from models import GroupMemberRole
 from shared import (
     GroupNotFoundException,
@@ -15,8 +15,6 @@ import logging
 
 
 logger = logging.getLogger(__name__)
-
-ERROR_MSG: str = "An unexpected error has occurred. Please try again later."
 
 @rate_limit
 @validate_chat_type("private", "group", "supergroup")
@@ -38,7 +36,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with get_db() as db:
                 groups = await GroupService.get_all_groups_by_user_id(db, telegram_user.id)
                 # Case where user is not a member of any groups
-                if not groups or len(groups) == 0:
+                if not groups:
                     await update.message.reply_text(
                         "You are not a member of any groups yet.\n"
                         "You can create a new group by adding me into a new group chat and invite other members to join the group.\n"
@@ -76,7 +74,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with get_db() as db:
                 groups = await GroupService.get_group_by_chat_id(db, telegram_chat_id)
 
-                if not groups or len(groups) == 0:
+                if not groups:
                     await update.message.reply_text(
                         "There are no groups associated with this group chat yet.\n"
                         "Anyone can create a new group by using the /newgroup command.\n\n"
@@ -555,12 +553,7 @@ def _format_members_list(group: dict, members: list) -> str:
 
     for member in sorted_members:
         role = member.get('role', 'member')
-
-        display_name = member.get('first_name') or member.get('username') or f"User {member.get('user_id')}"
-        if member.get('last_name'):
-            display_name += f" {member.get('last_name')}"
-
-        message += f"<b>{h(display_name)}</b> - {role.title()}\n"
+        message += f"<b>{get_display_name(member)}</b> - {role.title()}\n"
 
     message += f"\n<i>Total: {len(members)} member(s)</i>"
     return message
@@ -771,9 +764,7 @@ async def _execute_remove_member(query, context: ContextTypes.DEFAULT_TYPE, grou
             # Get target user info for display
             target_members = await GroupService.get_group_members_with_details(db, group_id)
             target_info = next((m for m in target_members if m.get('user_id') == target_user_id), None)
-            target_name = "Unknown user"
-            if target_info:
-                target_name = target_info.get('first_name') or target_info.get('username') or f"User {target_user_id}"
+            target_name = get_display_name(target_info) if target_info else h(f"User {target_user_id}")
             
             await GroupService.remove_member(db, group_id, target_user_id, user_id)
             
@@ -860,9 +851,7 @@ async def _execute_role_change(
 
         action_word = "promoted to Admin" if new_role == GroupMemberRole.ADMIN else "demoted to Member"
         target_info = next((m for m in members if m.get('user_id') == target_user_id), None)
-        target_name = (
-            target_info.get('first_name') or target_info.get('username') or f"User {target_user_id}"
-        ) if target_info else f"User {target_user_id}"
+        target_name = get_display_name(target_info) if target_info else h(f"User {target_user_id}")
 
         await query.answer(f"{target_name} {action_word}.", show_alert=False)
 

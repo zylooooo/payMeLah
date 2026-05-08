@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes
 from config import BOT_NAME
 from services import UserService
 from infrastructure import get_db
-from bot.utils import validate_chat_type
+from bot.utils import validate_chat_type, ERROR_MSG
 from bot.handlers.join_handler import handle_join_group
 import logging
 
@@ -14,10 +14,6 @@ NEW_USER_WELCOME_MSG: str = (
     "Use this bot to ✨automate the bill splitting process✨ with anyone!\n\n"
     "Click on the \"menu\" button to see the list of commands that I will be able to perform!\n\n"
     "If you have any question, please contact my developer at @zhiyiloo"
-)
-
-ERROR_MSG: str = (
-    "An unexpected error has occurred. Please try again later."
 )
 
 

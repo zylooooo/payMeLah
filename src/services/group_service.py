@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
 from sqlalchemy.orm import selectinload
-from models import Group, GroupMember, User, GroupMemberRole
+from models import Group, GroupMember, GroupMemberRole, User
 from shared import (
     UserNotFoundException,
     GroupNotFoundException,
@@ -263,31 +263,31 @@ class GroupService:
     @staticmethod
     async def get_group_members_with_details(db: AsyncSession, group_id: int) -> List[dict]:
         """
-        Get all members of a group with their user details.
-        Uses UserService to maintain service boundaries.
-        
+        Get all members of a group with their user details in a single JOIN query.
+
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group.
-        
+
         Returns:
             List[dict] - A list of member dictionaries with user details.
         """
         logger.info(f"Getting members with details for group ID: {group_id}")
-        
-        # Get group members first
-        members = await GroupService.get_group_members(db, group_id)
-        
-        # Enrich with user details using UserService
+
+        result = await db.execute(
+            select(GroupMember, User)
+            .join(User, GroupMember.user_id == User.id)
+            .where(GroupMember.group_id == group_id)
+            .order_by(GroupMember.joined_at)
+        )
         members_with_details = []
-        for member in members:
-            user = await UserService.get_user_by_id(db, member['user_id'])
-            if user:
-                member['username'] = user.get('username')
-                member['first_name'] = user.get('first_name')
-                member['last_name'] = user.get('last_name')
-            members_with_details.append(member)
-        
+        for member, user in result.all():
+            member_dict = member.to_dict()
+            member_dict['username'] = user.username
+            member_dict['first_name'] = user.first_name
+            member_dict['last_name'] = user.last_name
+            members_with_details.append(member_dict)
+
         logger.info(f"Found {len(members_with_details)} members with details for group ID: {group_id}")
         return members_with_details
 
@@ -483,52 +483,41 @@ class GroupService:
         return target_member.to_dict()
 
     @staticmethod
-    async def archive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
-        """
-        Archive a group. Only the owner can archive.
-        Archived groups are hidden from default listings but not deleted.
-        """
-        logger.info(f"User {requesting_user_id} archiving group {group_id}")
+    async def _set_archive_state(
+        db: AsyncSession,
+        group_id: int,
+        requesting_user_id: int,
+        is_archived: bool
+    ) -> dict:
+        """Set is_archived on a group. Only the owner may do this."""
+        verb = "archive" if is_archived else "unarchive"
+        logger.info(f"User {requesting_user_id} attempting to {verb} group {group_id}")
+
         role = await GroupService.get_member_role(db, group_id, requesting_user_id)
         if role != GroupMemberRole.OWNER:
-            raise UnauthorizedActionException("Only the group owner can archive the group.")
+            raise UnauthorizedActionException(f"Only the group owner can {verb} the group.")
 
         result = await db.execute(select(Group).where(Group.id == group_id))
         group = result.scalar_one_or_none()
         if not group:
             raise GroupNotFoundException(f"Group {group_id} not found.")
 
-        group.is_archived = True
+        group.is_archived = is_archived
         group.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(group)
-        logger.info(f"Group {group_id} archived by user {requesting_user_id}")
+        logger.info(f"Group {group_id} {verb}d by user {requesting_user_id}")
         return group.to_dict()
+
+    @staticmethod
+    async def archive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
+        """Archive a group. Only the owner can archive."""
+        return await GroupService._set_archive_state(db, group_id, requesting_user_id, is_archived=True)
 
     @staticmethod
     async def unarchive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
         """Restore an archived group. Only the owner can unarchive."""
-        logger.info(f"User {requesting_user_id} unarchiving group {group_id}")
-        role = await GroupService.get_member_role(db, group_id, requesting_user_id)
-        if role != GroupMemberRole.OWNER:
-            raise UnauthorizedActionException("Only the group owner can unarchive the group.")
-
-        result = await db.execute(select(Group).where(Group.id == group_id))
-        group = result.scalar_one_or_none()
-        if not group:
-            raise GroupNotFoundException(f"Group {group_id} not found.")
-
-        group.is_archived = False
-        group.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(group)
-        logger.info(f"Group {group_id} unarchived by user {requesting_user_id}")
-        return group.to_dict()
-
-    @staticmethod
-    async def get_archived_groups_by_user_id(db: AsyncSession, user_id: int) -> List[dict]:
-        """Get all archived groups that the user is a member of."""
-        return await GroupService.get_all_groups_by_user_id(db, user_id, include_archived=True)
+        return await GroupService._set_archive_state(db, group_id, requesting_user_id, is_archived=False)
 
     @staticmethod
     async def get_group_by_chat_id(db: AsyncSession, chat_id: int) -> List[dict]:

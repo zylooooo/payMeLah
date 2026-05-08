@@ -4,7 +4,7 @@ from typing import List, Optional
 from infrastructure import get_db
 from services import ExpenseService, GroupService, UserService
 from bot.keyboards import ExpenseKeyboard
-from bot.utils import validate_chat_type
+from bot.utils import validate_chat_type, ERROR_MSG, get_display_name
 from shared import (
     ExpenseNotFoundException,
     UnauthorizedActionException,
@@ -17,8 +17,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-ERROR_MSG: str = "An unexpected error has occurred. Please try again later."
 PER_PAGE: int = 5
+
+
+def _ctx_data(context: ContextTypes.DEFAULT_TYPE, is_group_chat: bool) -> dict:
+    """Return chat_data for group chats, user_data for private chats."""
+    return context.chat_data if is_group_chat else context.user_data
 
 
 # ===================================================================================
@@ -177,7 +181,7 @@ def _format_expense_details(expense: dict, participants: list, payer_name: Optio
     # Build participant breakdown
     breakdown_lines = []
     for p in participants:
-        name = p.get('first_name') or p.get('username') or f"User {p.get('user_id')}"
+        name = get_display_name(p)
         share = p.get('share_amount', 0)
         status = "✓" if p.get('is_settled') else "○"
         breakdown_lines.append(f"  {status} {name}: {currency} {share}")
@@ -254,25 +258,15 @@ async def expenses_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message)
             return
         
+        ctx = _ctx_data(context, is_group_chat)
         if len(groups) == 1:
-            # Single group - show expenses directly
             group = groups[0]
-            
-            # Store group info in appropriate context
-            if is_group_chat:
-                context.chat_data['expense_view_group_id'] = group['id']
-                context.chat_data['expense_view_group_name'] = group['name']
-            else:
-                context.user_data['expense_view_group_id'] = group['id']
-                context.user_data['expense_view_group_name'] = group['name']
-            
+            ctx['expense_view_group_id'] = group['id']
+            ctx['expense_view_group_name'] = group['name']
             await _show_expense_list(update, context, group['id'], group['name'], page=0, is_group_chat=is_group_chat)
         else:
             # Multiple groups - let user select
-            if is_group_chat:
-                context.chat_data['expense_view_groups'] = groups
-            else:
-                context.user_data['expense_view_groups'] = groups
+            ctx['expense_view_groups'] = groups
             
             keyboard = ExpenseKeyboard.get_group_selection_keyboard(groups)
             await update.message.reply_text(
@@ -326,19 +320,13 @@ async def _show_expense_list(
                 for payer_id in payer_ids:
                     user = await UserService.get_user_by_id(db, payer_id)
                     if user:
-                        payer_names[payer_id] = user.get('first_name') or user.get('username') or f"User {payer_id}"
+                        payer_names[payer_id] = get_display_name(user)
         
-        # Store current page so back-navigation can restore it
-        if is_group_chat:
-            context.chat_data['expense_view_current_page'] = page
-        else:
-            context.user_data['expense_view_current_page'] = page
+        ctx = _ctx_data(context, is_group_chat)
+        ctx['expense_view_current_page'] = page
 
         # Check if we should show back to groups button
-        if is_group_chat:
-            groups = context.chat_data.get('expense_view_groups', [])
-        else:
-            groups = context.user_data.get('expense_view_groups', [])
+        groups = ctx.get('expense_view_groups', [])
         show_back_to_groups = len(groups) > 1
 
         # Format message with payer names
@@ -416,7 +404,7 @@ async def _show_expense_details(
             if payer_id:
                 payer_user = await UserService.get_user_by_id(db, payer_id)
                 if payer_user:
-                    payer_name = payer_user.get('first_name') or payer_user.get('username') or f"User {payer_id}"
+                    payer_name = get_display_name(payer_user)
             
             # Check if user can modify this expense
             can_modify, _ = await ExpenseService.can_modify_expense(
@@ -471,20 +459,19 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
         _cleanup_expense_view_data(context, is_group_chat)
         return
     
+    ctx = _ctx_data(context, is_group_chat)
+
     # For pagination on group selection (no colon in data), validate context exists
     if action in [ExpenseKeyboard.ACTION_PREV, ExpenseKeyboard.ACTION_NEXT]:
         if data and ':' not in str(data):
-            # Group selection pagination - requires context
-            groups = context.chat_data.get('expense_view_groups', []) if is_group_chat else context.user_data.get('expense_view_groups', [])
-            if not groups:
+            if not ctx.get('expense_view_groups'):
                 await query.answer("This list has expired.", show_alert=True)
                 await query.edit_message_text("Session expired. Please use /expenses again.")
                 return
-    
+
     # For back to list without data (back to group selection), validate context
     if action == ExpenseKeyboard.ACTION_BACK_TO_LIST and not data:
-        groups = context.chat_data.get('expense_view_groups', []) if is_group_chat else context.user_data.get('expense_view_groups', [])
-        if not groups:
+        if not ctx.get('expense_view_groups'):
             await query.answer("This list has expired.", show_alert=True)
             await query.edit_message_text("Session expired. Please use /expenses again.")
             return
@@ -500,25 +487,13 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
         
         try:
             group_id = int(data)
-            
-            # Get group name from stored groups
-            if is_group_chat:
-                groups = context.chat_data.get('expense_view_groups', [])
-            else:
-                groups = context.user_data.get('expense_view_groups', [])
-            
+            groups = ctx.get('expense_view_groups', [])
             group = next((g for g in groups if g['id'] == group_id), None)
-            
+
             if group:
                 group_name = group['name']
-                # Store selected group info
-                if is_group_chat:
-                    context.chat_data['expense_view_group_id'] = group_id
-                    context.chat_data['expense_view_group_name'] = group_name
-                else:
-                    context.user_data['expense_view_group_id'] = group_id
-                    context.user_data['expense_view_group_name'] = group_name
-                
+                ctx['expense_view_group_id'] = group_id
+                ctx['expense_view_group_name'] = group_name
                 await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat)
             else:
                 # Group not in cache, try to fetch it
@@ -526,12 +501,8 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                     group_data = await GroupService.get_group_by_id(db, group_id)
                     if group_data:
                         group_name = group_data['name']
-                        if is_group_chat:
-                            context.chat_data['expense_view_group_id'] = group_id
-                            context.chat_data['expense_view_group_name'] = group_name
-                        else:
-                            context.user_data['expense_view_group_id'] = group_id
-                            context.user_data['expense_view_group_name'] = group_name
+                        ctx['expense_view_group_id'] = group_id
+                        ctx['expense_view_group_name'] = group_name
                         await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat)
                     else:
                         await query.edit_message_text("Group not found.")
@@ -555,13 +526,7 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                 parts = data.split(':')
                 group_id = int(parts[0])
                 page = int(parts[1])
-                
-                # Get group name from context
-                if is_group_chat:
-                    group_name = context.chat_data.get('expense_view_group_name', 'Group')
-                else:
-                    group_name = context.user_data.get('expense_view_group_name', 'Group')
-                
+                group_name = ctx.get('expense_view_group_name', 'Group')
                 await _show_expense_list(update, context, group_id, group_name, page=page, is_group_chat=is_group_chat)
             except (ValueError, IndexError) as e:
                 logger.error(f"Error parsing pagination data: {e}")
@@ -570,16 +535,10 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
             # Group selection pagination
             try:
                 page = int(data)
-                
-                if is_group_chat:
-                    groups = context.chat_data.get('expense_view_groups', [])
-                else:
-                    groups = context.user_data.get('expense_view_groups', [])
-                
+                groups = ctx.get('expense_view_groups', [])
                 if not groups:
                     await query.edit_message_text("Groups list expired. Please use /expenses again.")
                     return
-                
                 keyboard = ExpenseKeyboard.get_group_selection_keyboard(groups, page=page)
                 await query.edit_message_text(
                     "<b>Select a group to view expenses:</b>",
@@ -612,25 +571,14 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
             # Back from expense details to expense list
             try:
                 group_id = int(data)
-                
-                # Get group name from context
-                if is_group_chat:
-                    group_name = context.chat_data.get('expense_view_group_name', 'Group')
-                    saved_page = context.chat_data.get('expense_view_current_page', 0)
-                else:
-                    group_name = context.user_data.get('expense_view_group_name', 'Group')
-                    saved_page = context.user_data.get('expense_view_current_page', 0)
-
+                group_name = ctx.get('expense_view_group_name', 'Group')
+                saved_page = ctx.get('expense_view_current_page', 0)
                 await _show_expense_list(update, context, group_id, group_name, page=saved_page, is_group_chat=is_group_chat)
             except ValueError:
                 await query.edit_message_text("Invalid group ID.")
         else:
             # Back from expense list to group selection
-            if is_group_chat:
-                groups = context.chat_data.get('expense_view_groups', [])
-            else:
-                groups = context.user_data.get('expense_view_groups', [])
-            
+            groups = ctx.get('expense_view_groups', [])
             if groups:
                 keyboard = ExpenseKeyboard.get_group_selection_keyboard(groups)
                 await query.edit_message_text(

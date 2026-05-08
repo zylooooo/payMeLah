@@ -9,7 +9,7 @@ from services.balance_service import BalanceService
 from services.payment_service import PaymentService
 from bot.keyboards import GroupKeyboard
 from bot.keyboards.balance_keyboard import BalanceKeyboard
-from bot.utils import validate_chat_type, h, rate_limit
+from bot.utils import validate_chat_type, h, rate_limit, ERROR_MSG, get_display_name
 from shared import (
     GroupNotFoundException,
     UnauthorizedActionException
@@ -19,17 +19,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-ERROR_MSG: str = "An unexpected error has occurred. Please try again later."
 
-
-def _get_display_name(user_data: dict) -> str:
-    """Get HTML-escaped display name from user data."""
-    if user_data.get('first_name'):
-        name = user_data['first_name']
-        if user_data.get('last_name'):
-            name += f" {user_data['last_name']}"
-        return h(name)
-    return h(user_data.get('username') or f"User {user_data.get('user_id')}")
+async def _send_error(update, text: str, edit: bool = False) -> None:
+    """Send an error as an edited message (callbacks) or a reply (commands)."""
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text)
+    elif update.message:
+        await update.message.reply_text(text)
 
 
 def _format_amount(amount: Decimal, currency: str) -> str:
@@ -346,44 +342,22 @@ async def _show_group_balances(
             balances = await BalanceService.get_group_balances(
                 db, group_id, user_id, simplify=simplify
             )
-
             is_private = (update.effective_chat.type == "private") if update.effective_chat else False
             message = _format_group_balances_message(balances, is_private=is_private)
             has_debts = len(balances['debts']) > 0
             keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
 
             if edit_message and update.callback_query:
-                await update.callback_query.edit_message_text(
-                    message,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
+                await update.callback_query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
                 return None
-            else:
-                return await update.message.reply_text(
-                    message,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
+            return await update.message.reply_text(message, parse_mode="HTML", reply_markup=keyboard)
     except GroupNotFoundException:
-        error_msg = "Group not found."
-        if edit_message and update.callback_query:
-            await update.callback_query.edit_message_text(error_msg)
-        else:
-            await update.message.reply_text(error_msg)
+        await _send_error(update, "Group not found.", edit_message)
     except UnauthorizedActionException:
-        error_msg = "You are not a member of this group."
-        if edit_message and update.callback_query:
-            await update.callback_query.edit_message_text(error_msg)
-        else:
-            await update.message.reply_text(error_msg)
+        await _send_error(update, "You are not a member of this group.", edit_message)
     except Exception as e:
         logger.error(f"Error showing group balances: {e}", exc_info=True)
-        error_msg = ERROR_MSG
-        if edit_message and update.callback_query:
-            await update.callback_query.edit_message_text(error_msg)
-        else:
-            await update.message.reply_text(error_msg)
+        await _send_error(update, ERROR_MSG, edit_message)
     return None
 
 
@@ -401,7 +375,6 @@ async def _show_user_balance(
             balance = await BalanceService.get_user_balance_in_group(
                 db, group_id, user_id, simplify=simplify
             )
-
             message = _format_user_balance_message(balance)
             has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
             owes_money = len(balance['owes_to']) > 0
@@ -410,37 +383,16 @@ async def _show_user_balance(
             )
 
             if edit_message and update.callback_query:
-                await update.callback_query.edit_message_text(
-                    message,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
+                await update.callback_query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
                 return None
-            else:
-                return await update.message.reply_text(
-                    message,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
+            return await update.message.reply_text(message, parse_mode="HTML", reply_markup=keyboard)
     except GroupNotFoundException:
-        error_msg = "Group not found."
-        if edit_message and update.callback_query:
-            await update.callback_query.edit_message_text(error_msg)
-        else:
-            await update.message.reply_text(error_msg)
+        await _send_error(update, "Group not found.", edit_message)
     except UnauthorizedActionException:
-        error_msg = "You are not a member of this group."
-        if edit_message and update.callback_query:
-            await update.callback_query.edit_message_text(error_msg)
-        else:
-            await update.message.reply_text(error_msg)
+        await _send_error(update, "You are not a member of this group.", edit_message)
     except Exception as e:
         logger.error(f"Error showing user balance: {e}", exc_info=True)
-        error_msg = ERROR_MSG
-        if edit_message and update.callback_query:
-            await update.callback_query.edit_message_text(error_msg)
-        else:
-            await update.message.reply_text(error_msg)
+        await _send_error(update, ERROR_MSG, edit_message)
     return None
 
 
@@ -471,7 +423,7 @@ def _format_group_balances_message(balances: dict, is_private: bool = False) -> 
         # Member balances summary
         message += "<b>Member Summary:</b>\n"
         for member in members:
-            name = _get_display_name(member)
+            name = get_display_name(member)
             balance = member['balance']
 
             if balance > 0:
@@ -489,8 +441,8 @@ def _format_group_balances_message(balances: dict, is_private: bool = False) -> 
             for debt in debts:
                 from_user = members_lookup.get(debt['from_user_id'], {})
                 to_user = members_lookup.get(debt['to_user_id'], {})
-                from_name = _get_display_name(from_user) if from_user else f"User {debt['from_user_id']}"
-                to_name = _get_display_name(to_user) if to_user else f"User {debt['to_user_id']}"
+                from_name = get_display_name(from_user) if from_user else f"User {debt['from_user_id']}"
+                to_name = get_display_name(to_user) if to_user else f"User {debt['to_user_id']}"
                 message += f"  {from_name} ---> {to_name}: {_format_amount(debt['amount'], currency)}\n"
 
     # Multi-currency breakdown (only shown when group has expenses in multiple currencies)
@@ -560,7 +512,7 @@ def _format_user_balance_message(balance: dict) -> str:
     if owed_by:
         message += "<b>People who owe you:</b>\n"
         for debt in owed_by:
-            name = _get_display_name(debt)
+            name = get_display_name(debt)
             message += f"  {name}: {_format_amount(debt['amount'], currency)}\n"
         message += "\n"
 
@@ -568,7 +520,7 @@ def _format_user_balance_message(balance: dict) -> str:
     if owes_to:
         message += "<b>You owe:</b>\n"
         for debt in owes_to:
-            name = _get_display_name(debt)
+            name = get_display_name(debt)
             message += f"  {name}: {_format_amount(debt['amount'], currency)}\n"
         message += "\n"
 
@@ -1051,8 +1003,8 @@ async def _handle_payment_history(query, data: str, user_id: int) -> None:
             for p in payments[:20]:  # cap at 20 most recent
                 from_user = members_lookup.get(p['from_user_id'], {})
                 to_user = members_lookup.get(p['to_user_id'], {})
-                from_name = _get_display_name(from_user) if from_user else h(f"User {p['from_user_id']}")
-                to_name = _get_display_name(to_user) if to_user else h(f"User {p['to_user_id']}")
+                from_name = get_display_name(from_user) if from_user else h(f"User {p['from_user_id']}")
+                to_name = get_display_name(to_user) if to_user else h(f"User {p['to_user_id']}")
                 date_str = p['created_at'][:10] if p.get('created_at') else ''
                 note = f" — {h(p['description'])}" if p.get('description') else ''
                 message += (

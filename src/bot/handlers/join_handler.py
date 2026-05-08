@@ -7,11 +7,10 @@ from shared import (
     GroupMemberAlreadyExistsException,
     UnauthorizedGroupJoinException
 )
+from bot.utils import ERROR_MSG
 import logging
 
 logger = logging.getLogger(__name__)
-
-ERROR_MSG = "An unexpected error has occurred. Please try again later."
 
 
 async def handle_join_group(

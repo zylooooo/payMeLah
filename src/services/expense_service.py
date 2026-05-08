@@ -37,37 +37,32 @@ class ExpenseService:
         Args:
             db: AsyncSession - The database session.
             expense_data: Dict[str, Any] - Dictionary containing expense creation data.
-        
+
         Returns:
             dict - Created expense data.
         """
         logger.info(f"Creating expense in group {expense_data['group_id']} by user {expense_data['created_by']}")
 
-        # Verify that the group exists
         group = await GroupService.get_group_by_id(db, expense_data['group_id'])
         if not group:
             logger.warning(f"Group with ID {expense_data['group_id']} not found")
             raise GroupNotFoundException(f"Group with ID {expense_data['group_id']} not found")
-        
-        # Verify creator is a member
+
         if not await GroupService.is_member(db, expense_data['group_id'], expense_data['created_by']):
             logger.warning(f"Creator {expense_data['created_by']} is not a member of group {expense_data['group_id']}")
             raise UnauthorizedActionException("You must be a member of the group to create an expense")
-        
-        # Verify payer is a member of the group
+
         if not await GroupService.is_member(db, expense_data['group_id'], expense_data['payer_id']):
             logger.warning(f"Payer {expense_data['payer_id']} is not a member of group {expense_data['group_id']}")
             raise GroupMemberNotFoundException(f"Payer must be a member of the group.")
-        
-        # Verify all participants are members
+
         for participant_id in expense_data['participant_ids']:
             if not await GroupService.is_member(db, expense_data['group_id'], participant_id):
                 logger.warning(f"User {participant_id} is not a member of group {expense_data['group_id']}")
                 raise GroupMemberNotFoundException(
                     f"User {participant_id} is not a member of group {expense_data['group_id']}"
                 )
-        
-        # Calculate splits
+
         shares = ExpenseService._calculate_shares(
             amount=expense_data['amount'],
             split_type=expense_data['split_type'],
@@ -75,7 +70,6 @@ class ExpenseService:
             split_data=expense_data.get('split_data', None)
         )
 
-        # Create expense
         new_expense = Expense(
             group_id=expense_data['group_id'],
             description=expense_data['description'],
@@ -83,7 +77,7 @@ class ExpenseService:
             currency=expense_data['currency'],
             payer_id=expense_data['payer_id'],
             expense_date=expense_data['expense_date'],
-            category=expense_data['category'] if expense_data['category'] else None,
+            category=expense_data['category'],
             split_type=expense_data['split_type'],
             created_by=expense_data['created_by'],
             created_at=datetime.now(timezone.utc),
@@ -91,9 +85,8 @@ class ExpenseService:
             is_settled=False
         )
         db.add(new_expense)
-        await db.flush() # Get expense ID
+        await db.flush()
 
-        # Create participant records
         split_percentages = None
         if expense_data['split_type'] == ExpenseSplitType.PERCENTAGE and expense_data.get('split_data'):
             split_percentages = expense_data['split_data']['percentages']
@@ -104,27 +97,25 @@ class ExpenseService:
                 user_id=participant_id,
                 share_amount=shares[i],
                 split_percentage=split_percentages[i] if split_percentages else None,
-                is_settled=(participant_id == expense_data['payer_id']), # Payer's share is auto-settled
+                is_settled=(participant_id == expense_data['payer_id']),
                 settled_at=datetime.now(timezone.utc) if (participant_id == expense_data['payer_id']) else None
             )
             db.add(participant)
-        
-        # Check if all participants are settled (e.g., single participant who is also the payer)
-        # If so, mark the expense itself as settled
+
+        # Settle immediately when the only participant is also the payer
         all_participants_settled = all(
             participant_id == expense_data['payer_id']
             for participant_id in expense_data['participant_ids']
         )
         if all_participants_settled:
             new_expense.is_settled = True
-        
+
         await db.commit()
         await db.refresh(new_expense)
 
         logger.info(f"Expense {new_expense.id} created successfully in group {expense_data['group_id']}")
         return new_expense.to_dict()
         
-    # Helper function to calculate splits using SplitCalculator
     @staticmethod
     def _calculate_shares(
         amount: Decimal,
@@ -469,44 +460,27 @@ class ExpenseService:
         return expense_dict
     
     @staticmethod
-    async def can_modify_expense(
+    async def _assert_modifiable(
         db: AsyncSession,
         expense_id: int,
         requesting_user_id: int
-    ) -> tuple[bool, str]:
+    ) -> 'Expense':
         """
-        Check if a user can modify (edit/delete) an expense.
-        
-        Authorization rules:
-        - Only creator or payer can modify
-        - Cannot modify if expense is fully settled
-        - Cannot modify if any participant (other than payer) has settled
+        Raise the appropriate exception if the user cannot modify this expense.
+        Returns the Expense ORM object when the check passes.
 
-        Args:
-            db: AsyncSession - The database session.
-            expense_id: int - The expense ID.
-            requesting_user_id: int - The user attempting to modify.
-        
-        Returns:
-            tuple[bool, str] - (can_modify, reason_if_not)
+        Raises:
+            ExpenseNotFoundException, UnauthorizedActionException, ExpenseNotEditableException.
         """
-        logger.debug(f"Checking if user {requesting_user_id} can modify expense {expense_id}")
-        
-        # Get expense
-        result = await db.execute(
-            select(Expense).where(Expense.id == expense_id)
-        )
+        result = await db.execute(select(Expense).where(Expense.id == expense_id))
         expense = result.scalar_one_or_none()
-        
         if not expense:
-            return False, "Expense not found."
-        
-        # Check if user is creator or payer
+            raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
+
         if expense.created_by != requesting_user_id and expense.payer_id != requesting_user_id:
             logger.debug(f"User {requesting_user_id} is neither creator nor payer of expense {expense_id}")
-            return False, "You can only modify expenses you created or paid for."
-        
-        # Check if any non-payer participant has settled
+            raise UnauthorizedActionException("You can only modify expenses you created or paid for.")
+
         result = await db.execute(
             select(ExpenseParticipant).where(
                 and_(
@@ -516,13 +490,35 @@ class ExpenseService:
                 )
             )
         )
-        settled_participant = result.scalar_one_or_none()
-        
-        if settled_participant:
+        if result.scalar_one_or_none():
             logger.debug(f"Expense {expense_id} has settled participants other than payer")
-            return False, "Cannot modify: one or more participants have already settled their share."
-        
-        return True, ""
+            raise ExpenseNotEditableException(
+                "Cannot modify: one or more participants have already settled their share."
+            )
+
+        return expense
+
+    @staticmethod
+    async def can_modify_expense(
+        db: AsyncSession,
+        expense_id: int,
+        requesting_user_id: int
+    ) -> tuple[bool, str]:
+        """
+        Check if a user can modify (edit/delete) an expense.
+
+        Authorization rules:
+        - Only creator or payer can modify
+        - Cannot modify if any participant (other than payer) has settled
+
+        Returns:
+            tuple[bool, str] - (can_modify, reason_if_not)
+        """
+        try:
+            await ExpenseService._assert_modifiable(db, expense_id, requesting_user_id)
+            return True, ""
+        except (ExpenseNotFoundException, UnauthorizedActionException, ExpenseNotEditableException) as e:
+            return False, str(e)
 
     @staticmethod
     async def delete_expense(
@@ -537,38 +533,19 @@ class ExpenseService:
             db: AsyncSession - The database session.
             expense_id: int - The expense ID to delete.
             requesting_user_id: int - The user requesting deletion.
-        
+
         Returns:
             bool - True if deleted successfully.
-        
+
         Raises:
             ExpenseNotFoundException - If expense doesn't exist.
             UnauthorizedActionException - If user cannot delete this expense.
             ExpenseNotEditableException - If expense has settled participants.
         """
         logger.info(f"User {requesting_user_id} attempting to delete expense {expense_id}")
-        
-        # Check if user can modify this expense
-        can_modify, reason = await ExpenseService.can_modify_expense(db, expense_id, requesting_user_id)
-        
-        if not can_modify:
-            if "not found" in reason.lower():
-                raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
-            elif "settled" in reason.lower():
-                raise ExpenseNotEditableException(reason)
-            else:
-                raise UnauthorizedActionException(reason)
-        
-        # Get the expense
-        result = await db.execute(
-            select(Expense).where(Expense.id == expense_id)
-        )
-        expense = result.scalar_one_or_none()
-        
-        # Delete the expense (participants will cascade delete)
+        expense = await ExpenseService._assert_modifiable(db, expense_id, requesting_user_id)
         await db.delete(expense)
         await db.commit()
-        
         logger.info(f"Expense {expense_id} deleted successfully by user {requesting_user_id}")
         return True
 
@@ -590,10 +567,10 @@ class ExpenseService:
                 Supported fields: description, amount, currency, expense_date, payer_id,
                 participant_ids, split_type, split_data
             requesting_user_id: int - The user requesting the update.
-        
+
         Returns:
             dict - Updated expense data.
-        
+
         Raises:
             ExpenseNotFoundException - If expense doesn't exist.
             UnauthorizedActionException - If user cannot edit this expense.
@@ -601,28 +578,14 @@ class ExpenseService:
             GroupMemberNotFoundException - If payer or participant is not a group member.
         """
         logger.info(f"User {requesting_user_id} attempting to update expense {expense_id}")
-        
-        # Check if user can modify this expense
-        can_modify, reason = await ExpenseService.can_modify_expense(db, expense_id, requesting_user_id)
-        
-        if not can_modify:
-            if "not found" in reason.lower():
-                raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
-            elif "settled" in reason.lower():
-                raise ExpenseNotEditableException(reason)
-            else:
-                raise UnauthorizedActionException(reason)
-        
-        # Get the expense with participants
+        await ExpenseService._assert_modifiable(db, expense_id, requesting_user_id)
+
         result = await db.execute(
             select(Expense)
             .options(selectinload(Expense.participants))
             .where(Expense.id == expense_id)
         )
         expense = result.scalar_one_or_none()
-        
-        if not expense:
-            raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
         
         # Track what's changing for recalculation logic
         amount_changed = 'amount' in update_data and update_data['amount'] != expense.amount
