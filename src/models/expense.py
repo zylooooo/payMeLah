@@ -13,6 +13,31 @@ class ExpenseSplitType(str, enum.Enum):
     CUSTOM = 'custom'
 
 
+class ExpenseCategory(str, enum.Enum):
+    """Enumeration of possible categories for an expense."""
+    FOOD_AND_DRINK  = 'food_and_drink'
+    GROCERIES       = 'groceries'
+    TRANSPORT       = 'transport'
+    ACCOMMODATION   = 'accommodation'
+    ENTERTAINMENT   = 'entertainment'
+    SHOPPING        = 'shopping'
+    UTILITIES       = 'utilities'
+    HEALTH          = 'health'
+    OTHER           = 'other'
+
+
+CATEGORY_DISPLAY: dict[ExpenseCategory, str] = {
+    ExpenseCategory.FOOD_AND_DRINK:  "🍜 Food & Drink",
+    ExpenseCategory.GROCERIES:       "🛒 Groceries",
+    ExpenseCategory.TRANSPORT:       "🚌 Transport",
+    ExpenseCategory.ACCOMMODATION:   "🏨 Accommodation",
+    ExpenseCategory.ENTERTAINMENT:   "🎉 Entertainment",
+    ExpenseCategory.SHOPPING:        "🛍️ Shopping",
+    ExpenseCategory.UTILITIES:       "💡 Utilities",
+    ExpenseCategory.HEALTH:          "🏥 Health",
+    ExpenseCategory.OTHER:           "📦 Other",
+}
+
 
 class Expense(Base):
     """
@@ -29,7 +54,6 @@ class Expense(Base):
     currency = Column(String(3), nullable=False, comment='Currency of the expense')
     payer_id = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='ID of the user who paid for the expense')
     expense_date = Column(Date, nullable=False, default=lambda: datetime.now(timezone.utc).date(), comment='Date that the expense was incurred')
-    # TODO: consider adding a category enum here, revisit later on after base functionality is implemented
     category = Column(String(100), nullable=True, comment='Optional category of the expense')
     split_type = Column(Enum(ExpenseSplitType, native_enum=False, length=20), nullable=False, default=ExpenseSplitType.EQUAL, comment='Type of split for the expense')
     created_by = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment='ID of the user who created the expense')

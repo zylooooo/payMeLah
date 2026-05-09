@@ -20,7 +20,7 @@ from utils import (
 )
 from services import ExpenseService, GroupService, SplitCalculator
 from infrastructure import get_db
-from models import ExpenseSplitType
+from models import ExpenseSplitType, ExpenseCategory, CATEGORY_DISPLAY
 from shared import (
     ExpenseNotFoundException,
     UnauthorizedActionException,
@@ -43,7 +43,21 @@ FIELD_LABELS = {
     'payer_id': 'Payer',
     'participant_ids': 'Participants',
     'split_type': 'Split type',
+    'category': 'Category',
 }
+
+
+# ===================================================================================
+# Category Display Helper
+# ===================================================================================
+def _format_category_label(v) -> str:
+    """Return a display label for a raw category value (or None)."""
+    if v is None:
+        return "None"
+    try:
+        return CATEGORY_DISPLAY[ExpenseCategory(v)]
+    except (ValueError, KeyError):
+        return str(v)
 
 
 # ===================================================================================
@@ -246,12 +260,17 @@ async def _show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     description = changes.get('description', original.get('description')) or 'No description'
     amount = changes.get('amount', original.get('amount', 0))
     currency = changes.get('currency', original.get('currency', 'SGD'))
-    
+    category_val = changes.get('category', original.get('category'))
+    category_display = ""
+    if category_val:
+        category_display = f"\n<b>Category:</b> {_format_category_label(category_val)}"
+
     # Format the current state message
     message = (
         "<b>Edit Expense</b>\n\n"
         f"<b>Current:</b> {description}\n"
-        f"<b>Amount:</b> {currency} {amount}\n\n"
+        f"<b>Amount:</b> {currency} {amount}"
+        f"{category_display}\n\n"
         "Select a field to edit:"
     )
     
@@ -286,6 +305,9 @@ async def _show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 new_value = ", ".join(new_names) or "—"
             elif field == 'expense_date' and hasattr(new_value, 'isoformat'):
                 new_value = new_value.isoformat()
+            elif field == 'category':
+                old_value = _format_category_label(old_value)
+                new_value = _format_category_label(new_value)
 
             change_lines.append(f"  {label}: {old_value} → {new_value}")
 
@@ -324,7 +346,9 @@ async def handle_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return await _prompt_edit_participants(update, context)
         elif data == ExpenseKeyboard.FIELD_SPLIT_TYPE:
             return await _prompt_edit_split_type(update, context)
-    
+        elif data == ExpenseKeyboard.FIELD_CATEGORY:
+            return await _prompt_edit_category(update, context)
+
     return EditExpenseStates.SELECT_FIELD
 
 
@@ -711,6 +735,54 @@ async def handle_edit_split_type(update: Update, context: ContextTypes.DEFAULT_T
             return await _prompt_custom_shares(update, context)
     
     return EditExpenseStates.EDIT_SPLIT_TYPE
+
+
+# ===================================================================================
+# State: EDIT_CATEGORY
+# ===================================================================================
+async def _prompt_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt for a new category selection."""
+    current_val = _get_effective_value(context, 'category')
+    if current_val:
+        try:
+            current_label = CATEGORY_DISPLAY[ExpenseCategory(current_val)]
+        except (ValueError, KeyError):
+            current_label = current_val
+    else:
+        current_label = "None"
+
+    message = (
+        "<b>Edit Category</b>\n\n"
+        f"Current category: {current_label}\n\n"
+        "Select a new category, or Skip to keep it unchanged.\n"
+        "Use 'Remove Category' to clear it."
+    )
+    keyboard = ExpenseKeyboard.get_category_picker_keyboard(show_remove=True)
+    await _send_or_edit_message(update, context, message, keyboard)
+    return EditExpenseStates.EDIT_CATEGORY
+
+
+async def handle_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle category selection during edit."""
+    query = update.callback_query
+    await query.answer()
+
+    action, data = ExpenseKeyboard.extract_callback_info(query.data)
+
+    if action == ExpenseKeyboard.ACTION_CANCEL:
+        return await cancel_edit(update, context)
+    if action == ExpenseKeyboard.ACTION_BACK:
+        return await _show_edit_menu(update, context)
+    if action == ExpenseKeyboard.ACTION_SKIP:
+        return await _show_edit_menu(update, context)
+    if action == ExpenseKeyboard.ACTION_SELECT_CATEGORY:
+        if data == "none":
+            context.user_data['edit_changes']['category'] = None
+        else:
+            context.user_data['edit_changes']['category'] = data
+        return await _show_edit_menu(update, context)
+
+    return EditExpenseStates.EDIT_CATEGORY
 
 
 # ===================================================================================
@@ -1121,9 +1193,12 @@ async def _show_edit_summary(update: Update, context: ContextTypes.DEFAULT_TYPE)
             new_value = ", ".join(new_names) or "—"
         elif field == 'expense_date' and hasattr(new_value, 'isoformat'):
             new_value = new_value.isoformat()
+        elif field == 'category':
+            old_value = _format_category_label(old_value)
+            new_value = _format_category_label(new_value)
 
         change_lines.append(f"  {label}: {old_value} → {new_value}")
-    
+
     # Calculate new breakdown
     amount = changes.get('amount', original.get('amount'))
     currency = changes.get('currency', original.get('currency'))
@@ -1322,6 +1397,9 @@ def create_edit_expense_conversation_handler() -> ConversationHandler:
             ],
             EditExpenseStates.EDIT_SPLIT_TYPE: [
                 CallbackQueryHandler(handle_edit_split_type, pattern=f"^{ExpenseKeyboard.PREFIX}")
+            ],
+            EditExpenseStates.EDIT_CATEGORY: [
+                CallbackQueryHandler(handle_edit_category, pattern=f"^{ExpenseKeyboard.PREFIX}")
             ],
             EditExpenseStates.ENTER_EXACT_AMOUNTS: [
                 CallbackQueryHandler(handle_exact_amounts, pattern=f"^{ExpenseKeyboard.PREFIX}"),

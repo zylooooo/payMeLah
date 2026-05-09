@@ -5,6 +5,7 @@ from infrastructure import get_db
 from services import ExpenseService, GroupService, UserService
 from bot.keyboards import ExpenseKeyboard
 from bot.utils import validate_chat_type, ERROR_MSG, get_display_name
+from models import ExpenseCategory, CATEGORY_DISPLAY
 from shared import (
     ExpenseNotFoundException,
     UnauthorizedActionException,
@@ -114,46 +115,72 @@ def _format_expense_list_message(
     group_name: str,
     payer_names: dict,
     page: int = 0,
-    total_count: int = 0
+    total_count: int = 0,
+    active_filter: Optional[str] = None
 ) -> str:
     """
     Format the expense list message.
-    
+
     Args:
         expenses: List of expense dictionaries
         group_name: Name of the group
         payer_names: Dict mapping payer_id to display name
         page: Current page number
         total_count: Total number of expenses
+        active_filter: Optional category filter value
     """
     if total_count == 0:
+        if active_filter:
+            try:
+                cat = ExpenseCategory(active_filter)
+                filter_label = CATEGORY_DISPLAY[cat]
+            except ValueError:
+                filter_label = active_filter
+            return (
+                f"<b>💰 {group_name}</b>\n\n"
+                f"No expenses found for <i>{filter_label}</i>.\n\n"
+                "Try clearing the filter or use /addexpense to add an expense."
+            )
         return (
             f"<b>💰 {group_name}</b>\n\n"
             "No expenses found in this group.\n\n"
             "Use /addexpense to add the first expense!"
         )
-    
+
     # Calculate the starting index for display numbering
     start_idx = page * PER_PAGE
-    
+
     # Format expense list with payer names
     expense_lines = []
     for idx, expense in enumerate(expenses, start=start_idx + 1):
         payer_id = expense.get('payer_id')
         payer_name = payer_names.get(payer_id) if payer_id else None
         expense_lines.append(_format_expense_list_item(expense, idx, payer_name))
-    
+
     total_pages = (total_count + PER_PAGE - 1) // PER_PAGE
-    
-    message = (
-        f"<b>💰 {group_name}</b>\n"
-        f"<i>{total_count} expense{'s' if total_count != 1 else ''}</i>\n\n"
-        + "\n\n".join(expense_lines)
-    )
-    
+
+    # Build header — show filter label when active
+    if active_filter:
+        try:
+            cat = ExpenseCategory(active_filter)
+            filter_label = CATEGORY_DISPLAY[cat]
+        except ValueError:
+            filter_label = active_filter
+        header = (
+            f"<b>💰 {group_name}</b>\n"
+            f"<i>Showing: {filter_label} · {total_count} expense{'s' if total_count != 1 else ''}</i>\n\n"
+        )
+    else:
+        header = (
+            f"<b>💰 {group_name}</b>\n"
+            f"<i>{total_count} expense{'s' if total_count != 1 else ''}</i>\n\n"
+        )
+
+    message = header + "\n\n".join(expense_lines)
+
     if total_pages > 1:
         message += f"\n\n<i>Page {page + 1} of {total_pages}</i>"
-    
+
     return message
 
 
@@ -211,6 +238,7 @@ def _cleanup_expense_view_data(context: ContextTypes.DEFAULT_TYPE, is_group_chat
         'expense_view_group_id',
         'expense_view_group_name',
         'expense_view_current_page',
+        'expense_view_category_filter',   # NEW
     ]
     if is_group_chat:
         for key in keys:
@@ -263,7 +291,8 @@ async def expenses_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group = groups[0]
             ctx['expense_view_group_id'] = group['id']
             ctx['expense_view_group_name'] = group['name']
-            await _show_expense_list(update, context, group['id'], group['name'], page=0, is_group_chat=is_group_chat)
+            active_filter = ctx.get('expense_view_category_filter')
+            await _show_expense_list(update, context, group['id'], group['name'], page=0, is_group_chat=is_group_chat, active_filter=active_filter)
         else:
             # Multiple groups - let user select
             ctx['expense_view_groups'] = groups
@@ -288,31 +317,29 @@ async def _show_expense_list(
     group_id: int,
     group_name: str,
     page: int = 0,
-    is_group_chat: bool = False
+    is_group_chat: bool = False,
+    active_filter: Optional[str] = None
 ):
     """Display paginated list of expenses for a group using server-side pagination."""
     telegram_user = update.effective_user
     query = update.callback_query
-    
+
     try:
         async with get_db() as db:
             # Get total count for pagination
             total_count = await ExpenseService.get_expense_count_by_group_id(
-                db,
-                group_id,
-                requesting_user_id=telegram_user.id
+                db, group_id, requesting_user_id=telegram_user.id,
+                category=active_filter,
             )
-            
+
             # Fetch only current page expenses (server-side pagination)
             offset = page * PER_PAGE
             expenses = await ExpenseService.get_expenses_by_group_id(
-                db,
-                group_id,
-                requesting_user_id=telegram_user.id,
-                limit=PER_PAGE,
-                offset=offset
+                db, group_id, requesting_user_id=telegram_user.id,
+                limit=PER_PAGE, offset=offset,
+                category=active_filter,
             )
-            
+
             # Fetch payer names for all expenses on this page (batch query)
             payer_names = {}
             if expenses:
@@ -321,7 +348,7 @@ async def _show_expense_list(
                     user = await UserService.get_user_by_id(db, payer_id)
                     if user:
                         payer_names[payer_id] = get_display_name(user)
-        
+
         ctx = _ctx_data(context, is_group_chat)
         ctx['expense_view_current_page'] = page
 
@@ -330,8 +357,8 @@ async def _show_expense_list(
         show_back_to_groups = len(groups) > 1
 
         # Format message with payer names
-        message = _format_expense_list_message(expenses, group_name, payer_names, page, total_count)
-        
+        message = _format_expense_list_message(expenses, group_name, payer_names, page, total_count, active_filter)
+
         # Build keyboard with server-side pagination info
         keyboard = ExpenseKeyboard.get_expense_list_keyboard(
             expenses=expenses,
@@ -339,7 +366,8 @@ async def _show_expense_list(
             page=page,
             per_page=PER_PAGE,
             total_count=total_count,
-            show_back_to_groups=show_back_to_groups
+            show_back_to_groups=show_back_to_groups,
+            active_filter=active_filter,
         )
         
         # Send or edit message
@@ -494,7 +522,9 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                 group_name = group['name']
                 ctx['expense_view_group_id'] = group_id
                 ctx['expense_view_group_name'] = group_name
-                await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat)
+                ctx['expense_view_category_filter'] = None
+                active_filter = None
+                await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat, active_filter=active_filter)
             else:
                 # Group not in cache, try to fetch it
                 async with get_db() as db:
@@ -503,7 +533,9 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                         group_name = group_data['name']
                         ctx['expense_view_group_id'] = group_id
                         ctx['expense_view_group_name'] = group_name
-                        await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat)
+                        ctx['expense_view_category_filter'] = None
+                        active_filter = None
+                        await _show_expense_list(update, context, group_id, group_name, page=0, is_group_chat=is_group_chat, active_filter=active_filter)
                     else:
                         await query.edit_message_text("Group not found.")
         except ValueError:
@@ -527,7 +559,8 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                 group_id = int(parts[0])
                 page = int(parts[1])
                 group_name = ctx.get('expense_view_group_name', 'Group')
-                await _show_expense_list(update, context, group_id, group_name, page=page, is_group_chat=is_group_chat)
+                active_filter = ctx.get('expense_view_category_filter')
+                await _show_expense_list(update, context, group_id, group_name, page=page, is_group_chat=is_group_chat, active_filter=active_filter)
             except (ValueError, IndexError) as e:
                 logger.error(f"Error parsing pagination data: {e}")
                 await query.edit_message_text("Invalid pagination data.")
@@ -573,7 +606,8 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
                 group_id = int(data)
                 group_name = ctx.get('expense_view_group_name', 'Group')
                 saved_page = ctx.get('expense_view_current_page', 0)
-                await _show_expense_list(update, context, group_id, group_name, page=saved_page, is_group_chat=is_group_chat)
+                active_filter = ctx.get('expense_view_category_filter')
+                await _show_expense_list(update, context, group_id, group_name, page=saved_page, is_group_chat=is_group_chat, active_filter=active_filter)
             except ValueError:
                 await query.edit_message_text("Invalid group ID.")
         else:
@@ -671,6 +705,48 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
             await query.edit_message_text(ERROR_MSG)
         return
 
+    # Handle filter menu
+    if action == ExpenseKeyboard.ACTION_FILTER:
+        await query.answer()
+        await query.edit_message_text(
+            "<b>Filter by category:</b>",
+            parse_mode="HTML",
+            reply_markup=ExpenseKeyboard.get_filter_category_keyboard()
+        )
+        return
+
+    if action == ExpenseKeyboard.ACTION_FILTER_CATEGORY:
+        await query.answer()
+        ctx['expense_view_category_filter'] = data
+        ctx['expense_view_current_page'] = 0
+        group_id = ctx.get('expense_view_group_id')
+        group_name = ctx.get('expense_view_group_name', 'Group')
+        if group_id:
+            await _show_expense_list(
+                update, context, group_id, group_name,
+                page=0, is_group_chat=is_group_chat,
+                active_filter=data
+            )
+        else:
+            await query.edit_message_text("Session expired. Please use /expenses again.")
+        return
+
+    if action == ExpenseKeyboard.ACTION_CLEAR_FILTER:
+        await query.answer()
+        ctx['expense_view_category_filter'] = None
+        ctx['expense_view_current_page'] = 0
+        group_id = ctx.get('expense_view_group_id')
+        group_name = ctx.get('expense_view_group_name', 'Group')
+        if group_id:
+            await _show_expense_list(
+                update, context, group_id, group_name,
+                page=0, is_group_chat=is_group_chat,
+                active_filter=None
+            )
+        else:
+            await query.edit_message_text("Session expired. Please use /expenses again.")
+        return
+
 
 # ===================================================================================
 # Handler Registration Helper
@@ -682,5 +758,5 @@ def create_expense_view_callback_handler() -> CallbackQueryHandler:
     """
     return CallbackQueryHandler(
         handle_expense_view_callback,
-        pattern=f"^{ExpenseKeyboard.PREFIX}(select|view|prev|next|back_list|delete|confirm_del|cancel)"
+        pattern=f"^{ExpenseKeyboard.PREFIX}(select|view|prev|next|back_list|delete|confirm_del|cancel|filter|filter_cat|clear_filter)"
     )

@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from typing import Optional, Tuple, List
-from models import ExpenseSplitType
+from models import ExpenseSplitType, ExpenseCategory, CATEGORY_DISPLAY
 
 
 class ExpenseKeyboard:
@@ -38,6 +38,11 @@ class ExpenseKeyboard:
     FIELD_PAYER = "payer"
     FIELD_PARTICIPANTS = "participants"
     FIELD_SPLIT_TYPE = "split_type"
+    FIELD_CATEGORY = "category"
+    ACTION_SELECT_CATEGORY = "select_cat"
+    ACTION_FILTER = "filter"
+    ACTION_FILTER_CATEGORY = "filter_cat"
+    ACTION_CLEAR_FILTER = "clear_filter"
 
     @classmethod
     def get_group_selection_keyboard(cls, groups: List[dict], page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
@@ -169,6 +174,73 @@ class ExpenseKeyboard:
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
+    def get_category_picker_keyboard(
+        cls,
+        show_remove: bool = False
+    ) -> InlineKeyboardMarkup:
+        """3x3 category picker for create/edit expense conversations."""
+        categories = list(ExpenseCategory)
+        buttons = []
+        for i in range(0, len(categories), 3):
+            row = []
+            for cat in categories[i:i + 3]:
+                row.append(InlineKeyboardButton(
+                    CATEGORY_DISPLAY[cat],
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_SELECT_CATEGORY, cat.value
+                    )
+                ))
+            buttons.append(row)
+
+        skip_row = [InlineKeyboardButton(
+            "⏭️ Skip (No Category)",
+            callback_data=cls._build_callback_data(cls.ACTION_SKIP, cls.FIELD_CATEGORY)
+        )]
+        buttons.append(skip_row)
+
+        if show_remove:
+            buttons.append([InlineKeyboardButton(
+                "🗑 Remove Category",
+                callback_data=cls._build_callback_data(
+                    cls.ACTION_SELECT_CATEGORY, "none"
+                )
+            )])
+
+        buttons.append([
+            InlineKeyboardButton(
+                "<< Back",
+                callback_data=cls._build_callback_data(cls.ACTION_BACK, cls.FIELD_CATEGORY)
+            ),
+            InlineKeyboardButton(
+                "X Cancel",
+                callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+            )
+        ])
+        return InlineKeyboardMarkup(buttons)
+
+    @classmethod
+    def get_filter_category_keyboard(cls) -> InlineKeyboardMarkup:
+        """3x3 category picker for expense list filter."""
+        categories = list(ExpenseCategory)
+        buttons = []
+        for i in range(0, len(categories), 3):
+            row = []
+            for cat in categories[i:i + 3]:
+                row.append(InlineKeyboardButton(
+                    CATEGORY_DISPLAY[cat],
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_FILTER_CATEGORY, cat.value
+                    )
+                ))
+            buttons.append(row)
+
+        buttons.append([InlineKeyboardButton(
+            "↩️ Show All (Clear Filter)",
+            callback_data=cls._build_callback_data(cls.ACTION_CLEAR_FILTER)
+        )])
+        return InlineKeyboardMarkup(buttons)
+
+    @classmethod
     def get_confirmation_keyboard(cls) -> InlineKeyboardMarkup:
         """Keyboard for confirming expense creation."""
         return InlineKeyboardMarkup([
@@ -212,7 +284,8 @@ class ExpenseKeyboard:
         page: int = 0,
         per_page: int = 5,
         total_count: int = 0,
-        show_back_to_groups: bool = False
+        show_back_to_groups: bool = False,
+        active_filter: Optional[str] = None
     ) -> InlineKeyboardMarkup:
         """
         Keyboard for listing expenses with view buttons.
@@ -283,11 +356,29 @@ class ExpenseKeyboard:
                     callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST)
                 )
             ])
-        
+
+        # Filter button — label changes when a filter is active
+        if active_filter:
+            try:
+                cat = ExpenseCategory(active_filter)
+                label = f"{CATEGORY_DISPLAY[cat].split(' ', 1)[1]} ✕"
+            except ValueError:
+                label = "Filter ✕"
+            filter_btn = InlineKeyboardButton(
+                label,
+                callback_data=cls._build_callback_data(cls.ACTION_FILTER)
+            )
+        else:
+            filter_btn = InlineKeyboardButton(
+                "🔍 Filter",
+                callback_data=cls._build_callback_data(cls.ACTION_FILTER)
+            )
+
         buttons.append([
+            filter_btn,
             InlineKeyboardButton("X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL))
         ])
-    
+
         return InlineKeyboardMarkup(buttons)
     
     @classmethod
@@ -394,6 +485,12 @@ class ExpenseKeyboard:
                 InlineKeyboardButton(
                     "Split Type",
                     callback_data=cls._build_callback_data(cls.ACTION_EDIT_FIELD, cls.FIELD_SPLIT_TYPE)
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Category",
+                    callback_data=cls._build_callback_data(cls.ACTION_EDIT_FIELD, cls.FIELD_CATEGORY)
                 )
             ]
         ]

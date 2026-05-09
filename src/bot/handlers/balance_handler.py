@@ -9,7 +9,10 @@ from services.balance_service import BalanceService
 from services.payment_service import PaymentService
 from bot.keyboards import GroupKeyboard
 from bot.keyboards.balance_keyboard import BalanceKeyboard
-from bot.utils import validate_chat_type, h, rate_limit, ERROR_MSG, get_display_name
+from bot.utils import (
+    validate_chat_type, h, rate_limit, ERROR_MSG, get_display_name,
+    can_nudge, record_nudge, cooldown_remaining
+)
 from shared import (
     GroupNotFoundException,
     UnauthorizedActionException
@@ -337,8 +340,9 @@ async def _show_user_balance(
             message = _format_user_balance_message(balance)
             has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
             owes_money = len(balance['owes_to']) > 0
+            has_owed_by = len(balance['owed_by']) > 0
             keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                group_id, has_debts, owes_money, is_simplified=simplify
+                group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
             )
 
             if edit_message and update.callback_query:
@@ -546,6 +550,11 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
             # Will be re-fetched in _handle_back_to_list, just log for now
             logger.debug(f"Balance groups not in context for user {telegram_user.id}, will re-fetch")
 
+    # Handle NUDGE_PERSON before blanket answer so show_alert works
+    if action == BalanceKeyboard.ACTION_NUDGE_PERSON:
+        await _handle_nudge_send(query, context, data, telegram_user.id)
+        return
+
     # Validation passed, acknowledge the callback
     await query.answer()
 
@@ -567,6 +576,33 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if action == BalanceKeyboard.ACTION_PAYMENT_HISTORY:
         await _handle_payment_history(query, data, telegram_user.id)
+        return
+
+    if action == BalanceKeyboard.ACTION_BACK:
+        # Re-render the user balance view for this group
+        group_id_str = data
+        try:
+            group_id = int(group_id_str)
+        except (TypeError, ValueError):
+            await query.edit_message_text("Invalid group.")
+            return
+        async with get_db() as db:
+            simplify = await _get_effective_simplify(db, group_id, telegram_user.id, context)
+            balance = await BalanceService.get_user_balance_in_group(
+                db, group_id, telegram_user.id, simplify=simplify
+            )
+        message = _format_user_balance_message(balance)
+        has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
+        owes_money = len(balance['owes_to']) > 0
+        has_owed_by = len(balance['owed_by']) > 0
+        keyboard = BalanceKeyboard.get_user_balance_keyboard(
+            group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
+        )
+        await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    if action == BalanceKeyboard.ACTION_NUDGE:
+        await _handle_nudge_picker(query, context, data, telegram_user.id)
         return
 
 
@@ -603,8 +639,9 @@ async def _handle_group_selection(
                 message = _format_user_balance_message(balance)
                 has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
                 owes_money = len(balance['owes_to']) > 0
+                has_owed_by = len(balance['owed_by']) > 0
                 keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                    group_id, has_debts, owes_money, is_simplified=simplify
+                    group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
                 )
 
             # Store current view for refresh
@@ -702,8 +739,9 @@ async def _handle_refresh(
                 message = _format_user_balance_message(balance)
                 has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
                 owes_money = len(balance['owes_to']) > 0
+                has_owed_by = len(balance['owed_by']) > 0
                 keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                    group_id, has_debts, owes_money, is_simplified=simplify
+                    group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
                 )
 
             await query.edit_message_text(
@@ -764,8 +802,9 @@ async def _handle_toggle_simplify(
                 message = _format_user_balance_message(balance)
                 has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
                 owes_money = len(balance['owes_to']) > 0
+                has_owed_by = len(balance['owed_by']) > 0
                 keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                    group_id, has_debts, owes_money, is_simplified=new_simplify
+                    group_id, has_debts, owes_money, is_simplified=new_simplify, has_owed_by=has_owed_by
                 )
 
         await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
@@ -885,6 +924,180 @@ async def _handle_payment_history(query, data: str, user_id: int) -> None:
     except Exception as e:
         logger.error(f"Error showing payment history: {e}", exc_info=True)
         await query.edit_message_text(ERROR_MSG)
+
+
+async def _handle_nudge_picker(query, context, data: str, user_id: int) -> None:
+    """Show the nudge person picker, marking cooldown and recently-nudged users."""
+    if not data:
+        await query.edit_message_text("Invalid nudge request.")
+        return
+
+    try:
+        group_id = int(data)
+    except ValueError:
+        await query.edit_message_text("Invalid group.")
+        return
+
+    try:
+        async with get_db() as db:
+            simplify = await _get_effective_simplify(db, group_id, user_id, context)
+            balance = await BalanceService.get_user_balance_in_group(
+                db, group_id, user_id, simplify=simplify
+            )
+        owed_by = balance.get('owed_by', [])
+
+        if not owed_by:
+            await query.edit_message_text("No one owes you in this group right now.")
+            return
+
+        on_cooldown = {
+            p['user_id'] for p in owed_by
+            if not can_nudge(user_id, p['user_id'], group_id)
+        }
+        recently_nudged = context.user_data.get('recently_nudged', {}).get(group_id, [])
+
+        keyboard = BalanceKeyboard.get_nudge_person_picker_keyboard(
+            group_id=group_id,
+            owed_by=owed_by,
+            on_cooldown_ids=on_cooldown,
+            recently_nudged_ids=set(recently_nudged),
+        )
+        await query.edit_message_text(
+            "<b>Who would you like to nudge?</b>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        logger.error(f"Error showing nudge picker: {e}", exc_info=True)
+        await query.edit_message_text(ERROR_MSG)
+
+
+async def _handle_nudge_send(query, context, data: str, nudger_id: int) -> None:
+    """Send a nudge to the selected person. DM first, group chat fallback."""
+    if not data or ':' not in data:
+        await query.answer("Invalid nudge data.", show_alert=True)
+        return
+
+    parts = data.split(':', 1)
+    try:
+        nudgee_id = int(parts[0])
+        group_id = int(parts[1])
+    except ValueError:
+        await query.answer("Invalid nudge data.", show_alert=True)
+        return
+
+    if not can_nudge(nudger_id, nudgee_id, group_id):
+        remaining = cooldown_remaining(nudger_id, nudgee_id, group_id)
+        hours = int(remaining.total_seconds() // 3600) if remaining else 0
+        await query.answer(
+            f"You already nudged this person recently. Try again in ~{hours}h.",
+            show_alert=True
+        )
+        return
+
+    try:
+        async with get_db() as db:
+            group = await GroupService.get_group_by_id(db, group_id)
+            nudgee_user = await UserService.get_user_by_id(db, nudgee_id)
+            nudger_user = await UserService.get_user_by_id(db, nudger_id)
+
+        if not group or not nudgee_user or not nudger_user:
+            await query.answer("Could not load user or group info.", show_alert=True)
+            return
+
+        group_name = group.get('name', 'the group')
+        nudger_name = nudger_user.get('first_name') or nudger_user.get('username') or f"User {nudger_id}"
+        nudgee_name = nudgee_user.get('first_name') or nudgee_user.get('username') or f"User {nudgee_id}"
+        currency = group.get('default_currency', 'SGD')
+
+        async with get_db() as db:
+            simplify = await _get_effective_simplify(db, group_id, nudger_id, context)
+            balance = await BalanceService.get_user_balance_in_group(
+                db, group_id, nudger_id, simplify=simplify
+            )
+        owed_entry = next(
+            (d for d in balance.get('owed_by', []) if d['user_id'] == nudgee_id),
+            None
+        )
+        amount_str = f"{currency} {owed_entry['amount']:,.2f}" if owed_entry else "some money"
+
+        dm_text = (
+            f"👋 Hey! Just a reminder — you owe <b>{h(nudger_name)}</b> "
+            f"<b>{amount_str}</b> in the group <b>{h(group_name)}</b>.\n\n"
+            "Use /mybalance to check your balance and settle up!"
+        )
+
+        sent_dm = False
+        try:
+            await context.bot.send_message(
+                chat_id=nudgee_id, text=dm_text, parse_mode="HTML"
+            )
+            sent_dm = True
+        except Exception as e:
+            logger.debug(f"DM nudge to {nudgee_id} failed: {e}")
+
+        if not sent_dm:
+            telegram_chat_id = group.get('telegram_chat_id')
+            if telegram_chat_id:
+                nudgee_username = nudgee_user.get('username')
+                mention = f"@{nudgee_username}" if nudgee_username else h(nudgee_name)
+                group_text = (
+                    f"{mention} Hey! Just a reminder that you have a pending "
+                    f"balance in <b>{h(group_name)}</b>. "
+                    "Use /mybalance to check your balance!"
+                )
+                try:
+                    await context.bot.send_message(
+                        chat_id=telegram_chat_id, text=group_text, parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.debug(f"Group chat nudge to {nudgee_id} in chat {telegram_chat_id} failed: {e}")
+                    await query.answer(
+                        f"Couldn't reach {nudgee_name} — they may need to start the bot first.",
+                        show_alert=True
+                    )
+                    return
+            else:
+                await query.answer(
+                    f"Couldn't reach {nudgee_name} — they may need to start the bot first.",
+                    show_alert=True
+                )
+                return
+
+        record_nudge(nudger_id, nudgee_id, group_id)
+        all_nudged = context.user_data.setdefault('recently_nudged', {})
+        recently_nudged = all_nudged.setdefault(group_id, [])
+        if nudgee_id not in recently_nudged:
+            recently_nudged.append(nudgee_id)
+
+        await query.answer(f"Nudge sent to {nudgee_name}!")
+
+        # Re-render picker with updated state
+        async with get_db() as db:
+            simplify_rerender = await _get_effective_simplify(db, group_id, nudger_id, context)
+            balance = await BalanceService.get_user_balance_in_group(
+                db, group_id, nudger_id, simplify=simplify_rerender
+            )
+        owed_by = balance.get('owed_by', [])
+        on_cooldown = {
+            p['user_id'] for p in owed_by
+            if not can_nudge(nudger_id, p['user_id'], group_id)
+        }
+        keyboard = BalanceKeyboard.get_nudge_person_picker_keyboard(
+            group_id=group_id,
+            owed_by=owed_by,
+            on_cooldown_ids=on_cooldown,
+            recently_nudged_ids=set(recently_nudged),
+        )
+        await query.edit_message_text(
+            "<b>Who would you like to nudge?</b>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+
+    except Exception as e:
+        logger.error(f"Error sending nudge: {e}", exc_info=True)
+        await query.answer(ERROR_MSG, show_alert=True)
 
 
 def create_balance_callback_handler() -> CallbackQueryHandler:

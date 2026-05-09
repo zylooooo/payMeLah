@@ -19,6 +19,8 @@ class BalanceKeyboard:
     ACTION_NEXT = "next"
     ACTION_PREV = "prev"
     ACTION_PAYMENT_HISTORY = "pay_hist"
+    ACTION_NUDGE        = "nudge"         # opens person picker
+    ACTION_NUDGE_PERSON = "nudge_person"  # sends nudge to a specific person
 
     @classmethod
     def get_group_selection_keyboard(
@@ -173,7 +175,8 @@ class BalanceKeyboard:
         group_id: int,
         has_debts: bool = True,
         owes_money: bool = False,
-        is_simplified: bool = True
+        is_simplified: bool = True,
+        has_owed_by: bool = False,
     ) -> InlineKeyboardMarkup:
         """
         Generate keyboard for user's balance in a group.
@@ -183,6 +186,7 @@ class BalanceKeyboard:
             has_debts: Whether the user has any debts/credits.
             owes_money: Whether the user owes money (can settle).
             is_simplified: Whether the current view is showing simplified debts.
+            has_owed_by: Whether someone owes the user money (show Nudge button).
         """
         buttons = []
 
@@ -193,6 +197,18 @@ class BalanceKeyboard:
                     "Settle My Debts",
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SETTLE_UP,
+                        str(group_id)
+                    )
+                )
+            ])
+
+        # Nudge button (only if someone owes the user)
+        if has_owed_by:
+            buttons.append([
+                InlineKeyboardButton(
+                    "Nudge",
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_NUDGE,
                         str(group_id)
                     )
                 )
@@ -235,6 +251,53 @@ class BalanceKeyboard:
 
         return InlineKeyboardMarkup(buttons)
 
+
+    @classmethod
+    def get_nudge_person_picker_keyboard(
+        cls,
+        group_id: int,
+        owed_by: list,
+        on_cooldown_ids: set,
+        recently_nudged_ids: set,
+    ) -> InlineKeyboardMarkup:
+        """
+        Person picker for the nudge flow.
+
+        Args:
+            group_id: Group ID (for callback data).
+            owed_by: List of dicts with keys user_id, first_name, username.
+            on_cooldown_ids: Set of user_ids currently on cooldown.
+            recently_nudged_ids: Set of user_ids nudged in this session (show ✓).
+        """
+        buttons = []
+        for person in owed_by:
+            uid = person['user_id']
+            name = person.get('first_name') or person.get('username') or f"User {uid}"
+            if uid in recently_nudged_ids:
+                label = f"{name} ✓ Nudged"
+            elif uid in on_cooldown_ids:
+                label = f"{name} ⏳"
+            else:
+                label = name
+            buttons.append([InlineKeyboardButton(
+                label,
+                callback_data=cls._build_callback_data(
+                    cls.ACTION_NUDGE_PERSON,
+                    f"{uid}:{group_id}"
+                )
+            )])
+
+        buttons.append([
+            InlineKeyboardButton(
+                "<< Back",
+                callback_data=cls._build_callback_data(cls.ACTION_BACK, str(group_id))
+            ),
+            InlineKeyboardButton(
+                "X Cancel",
+                callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+            )
+        ])
+        return InlineKeyboardMarkup(buttons)
 
     @classmethod
     def get_close_keyboard(cls) -> InlineKeyboardMarkup:

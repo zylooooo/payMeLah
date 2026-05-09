@@ -216,7 +216,8 @@ class ExpenseService:
         group_id: int,
         requesting_user_id: int,
         limit: int = 10,
-        offset: int = 0
+        offset: int = 0,
+        category: Optional[str] = None
     ) -> List[dict]:
         """
         Get expenses by group ID with pagination.
@@ -227,10 +228,11 @@ class ExpenseService:
             requesting_user_id: int - The ID of the user requesting the expenses. For authorization purposes (User must be a member of the group)
             limit: int - The maximum number of expenses to return (default = 10)
             offset: int - The number of expenses to skip (default = 0)
-        
+            category: Optional[str] - The category to filter expenses by (default = None)
+
         Returns:
             List[dict] - A list of expense dictionaries in descending order of expense date.
-        
+
         Raises:
             GroupNotFoundException - If the group does not exist.
             UnautorizedActionException - If the user does not belong to the group.
@@ -241,18 +243,21 @@ class ExpenseService:
         group = await GroupService.get_group_by_id(db, group_id)
         if not group:
             raise GroupNotFoundException(f"Group with ID {group_id} not found")
-        
+
         if not await GroupService.is_member(db, group_id, requesting_user_id):
             raise UnauthorizedActionException(f"User {requesting_user_id} is requesting expenses for group {group_id} that they are not a member of.")
-        
+
         # Get expenses with pagination
-        result = await db.execute(
+        query = (
             select(Expense)
             .where(Expense.group_id == group_id)
-            .order_by(Expense.expense_date.desc(), Expense.created_at.desc())
-            .limit(limit)
-            .offset(offset)
         )
+        if category is not None:
+            query = query.where(Expense.category == category)
+        query = query.order_by(Expense.expense_date.desc(), Expense.created_at.desc())
+        query = query.limit(limit).offset(offset)
+
+        result = await db.execute(query)
         expenses = result.scalars().all()
 
         logger.info(f"Successfully found {len(expenses)} expenses for group {group_id}")
@@ -262,7 +267,8 @@ class ExpenseService:
     async def get_expense_count_by_group_id(
         db: AsyncSession,
         group_id: int,
-        requesting_user_id: int
+        requesting_user_id: int,
+        category: Optional[str] = None
     ) -> int:
         """
         Get the total count of expenses in a group.
@@ -272,10 +278,11 @@ class ExpenseService:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group to count expenses for.
             requesting_user_id: int - The ID of the user requesting. For authorization purposes.
-        
+            category: Optional[str] - The category to filter expenses by (default = None)
+
         Returns:
             int - Total count of expenses in the group.
-        
+
         Raises:
             GroupNotFoundException - If the group does not exist.
             UnauthorizedActionException - If the user does not belong to the group.
@@ -286,17 +293,17 @@ class ExpenseService:
         group = await GroupService.get_group_by_id(db, group_id)
         if not group:
             raise GroupNotFoundException(f"Group with ID {group_id} not found")
-        
+
         if not await GroupService.is_member(db, group_id, requesting_user_id):
             raise UnauthorizedActionException(
                 f"User {requesting_user_id} is not a member of group {group_id}."
             )
-        
+
         # Get count
-        result = await db.execute(
-            select(func.count(Expense.id))
-            .where(Expense.group_id == group_id)
-        )
+        count_query = select(func.count(Expense.id)).where(Expense.group_id == group_id)
+        if category is not None:
+            count_query = count_query.where(Expense.category == category)
+        result = await db.execute(count_query)
         count = result.scalar()
 
         logger.info(f"Found {count} expenses for group {group_id}")

@@ -1,5 +1,6 @@
 from .decorators import validate_chat_type
 from .rate_limiter import rate_limit
+from .nudge_limiter import can_nudge, record_nudge, cooldown_remaining
 from html import escape as _html_escape
 
 
@@ -28,4 +29,4 @@ def get_display_name(user_data: dict) -> str:
     return h(user_data.get('username') or f"User {uid}")
 
 
-__all__ = ["validate_chat_type", "rate_limit", "h", "ERROR_MSG", "get_display_name"]
+__all__ = ["validate_chat_type", "rate_limit", "h", "ERROR_MSG", "get_display_name", "can_nudge", "record_nudge", "cooldown_remaining"]

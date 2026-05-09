@@ -22,6 +22,7 @@ class CreateExpenseStates(Enum):
     SELECT_CURRENCY = auto()
     AMOUNT = auto()
     DESCRIPTION = auto()
+    SELECT_CATEGORY = auto()
     SELECT_PAYER = auto()
     SELECT_PARTICIPANTS = auto()
     SELECT_SPLIT_TYPE = auto()
@@ -51,4 +52,5 @@ class EditExpenseStates(Enum):
     ENTER_EXACT_AMOUNTS = auto()    # Per-participant exact amounts
     ENTER_PERCENTAGES = auto()      # Per-participant percentages
     ENTER_CUSTOM_SHARES = auto()    # Per-participant share ratios
+    EDIT_CATEGORY = auto()          # Category selection
     SUMMARY = auto()                # Confirm changes before saving

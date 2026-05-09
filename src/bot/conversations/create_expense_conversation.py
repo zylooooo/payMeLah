@@ -22,7 +22,7 @@ from utils import (
 from services import ExpenseService, GroupService, SplitCalculator
 from infrastructure import get_db
 from bot.utils import validate_chat_type
-from models import ExpenseSplitType
+from models import ExpenseSplitType, ExpenseCategory, CATEGORY_DISPLAY
 import logging
 
 
@@ -391,10 +391,10 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return await _prompt_amount(update, context)
         if action == ExpenseKeyboard.ACTION_SKIP:
             context.user_data['expense_data']['description'] = None
-            return await _prompt_payer_selection(update, context)
+            return await _prompt_category(update, context)
 
         return CreateExpenseStates.DESCRIPTION
-    
+
     # Handle text input
     is_valid, error_msg = validate_expense_description(update.message.text)
 
@@ -406,9 +406,45 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ExpenseKeyboard.get_navigation_keyboard(current_field='description', is_first=False, show_skip=True)
         )
         return CreateExpenseStates.DESCRIPTION
-    
+
     context.user_data['expense_data']['description'] = update.message.text.strip()
-    return await _prompt_payer_selection(update, context)
+    return await _prompt_category(update, context)
+
+# ===================================================================================
+# State: SELECT_CATEGORY
+# ===================================================================================
+async def _prompt_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt the user to choose an optional category for the expense."""
+    message = (
+        "<b>Select Category</b> (Optional)\n\n"
+        "What type of expense is this?\n"
+        "<i>Tap Skip if you don't want to categorise it.</i>"
+    )
+    keyboard = ExpenseKeyboard.get_category_picker_keyboard()
+    await _send_or_edit_message(update, context, message, keyboard)
+    return CreateExpenseStates.SELECT_CATEGORY
+
+
+async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle category selection callback."""
+    query = update.callback_query
+    await query.answer()
+
+    action, data = ExpenseKeyboard.extract_callback_info(query.data)
+
+    if action == ExpenseKeyboard.ACTION_CANCEL:
+        return await cancel_expense(update, context)
+    if action == ExpenseKeyboard.ACTION_BACK:
+        return await _prompt_description(update, context)
+    if action == ExpenseKeyboard.ACTION_SKIP:
+        context.user_data['expense_data']['category'] = None
+        return await _prompt_payer_selection(update, context)
+    if action == ExpenseKeyboard.ACTION_SELECT_CATEGORY:
+        context.user_data['expense_data']['category'] = data  # e.g. 'food_and_drink'
+        return await _prompt_payer_selection(update, context)
+
+    return CreateExpenseStates.SELECT_CATEGORY
+
 
 # ===================================================================================
 # State: SELECT_PAYER
@@ -444,8 +480,8 @@ async def handle_payer_selection(update: Update, context: ContextTypes.DEFAULT_T
     if action == ExpenseKeyboard.ACTION_CANCEL:
         return await cancel_expense(update, context)
     if action == ExpenseKeyboard.ACTION_BACK:
-        return await _prompt_description(update, context)
-    
+        return await _prompt_category(update, context)
+
     if action == ExpenseKeyboard.ACTION_SELECT_PAYER:
         payer_id = int(data)
         context.user_data['expense_data']['payer_id'] = payer_id
@@ -1025,13 +1061,22 @@ async def _show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     breakdown_text = "\n".join(breakdown_lines)
 
+    category_val = expense_data.get('category')
+    category_line = ""
+    if category_val:
+        try:
+            cat = ExpenseCategory(category_val)
+            category_line = f"\n<b>Category:</b> {CATEGORY_DISPLAY[cat]}"
+        except (ValueError, KeyError):
+            pass
+
     message = (
         "<b>📋 Expense Summary</b>\n\n"
         f"<b>Group:</b> {group_name}\n"
         f"<b>Description:</b> {description}\n"
         f"<b>Total:</b> {currency} {amount}\n"
         f"<b>Paid by:</b> {payer_name}\n"
-        f"<b>Split type:</b> {split_type.value.title()}\n\n"
+        f"<b>Split type:</b> {split_type.value.title()}{category_line}\n\n"
         f"<b>Breakdown:</b>\n{breakdown_text}\n\n"
         "Confirm to add this expense?"
     )
@@ -1106,7 +1151,7 @@ async def _create_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             'split_type': expense_data['split_type'],
             'created_by': telegram_user.id,
             'expense_date': datetime.now(timezone.utc).date(),
-            'category': None,
+            'category': expense_data.get('category'),
             'split_data': expense_data.get('split_data')
         }
 
@@ -1176,6 +1221,9 @@ def create_expense_conversation_handler() -> ConversationHandler:
             CreateExpenseStates.DESCRIPTION: [
                 CallbackQueryHandler(handle_description, pattern=f"^{ExpenseKeyboard.PREFIX}"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description)
+            ],
+            CreateExpenseStates.SELECT_CATEGORY: [
+                CallbackQueryHandler(handle_category, pattern=f"^{ExpenseKeyboard.PREFIX}")
             ],
             CreateExpenseStates.SELECT_PAYER: [
                 CallbackQueryHandler(handle_payer_selection, pattern=f"^{ExpenseKeyboard.PREFIX}")
