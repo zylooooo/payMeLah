@@ -8,8 +8,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL = timedelta(hours=1)
-# Frankfurter moved from api.frankfurter.app → api.frankfurter.dev (see https://frankfurter.dev/)
-_API_BASE = "https://api.frankfurter.dev/v1"
+# ExchangeRate-API open endpoint — no key required, ~160 currencies, updates daily
+# Attribution: https://www.exchangerate-api.com
+_API_BASE = "https://open.er-api.com/v6/latest"
 
 # In-memory rate cache: {base_currency: {'rates': {target: float, ...}, 'fetched_at': datetime}}
 _rate_cache: Dict[str, dict] = {}
@@ -17,8 +18,8 @@ _rate_cache: Dict[str, dict] = {}
 
 class CurrencyService:
     """
-    Fetches live exchange rates from Frankfurter (ECB data, no API key required).
-    Rates are cached in-memory for 1 hour to avoid unnecessary network calls.
+    Fetches live exchange rates from ExchangeRate-API open endpoint (no API key required).
+    Covers ~160 currencies. Rates update daily; cached in-memory for 1 hour.
     """
 
     @classmethod
@@ -92,15 +93,21 @@ class CurrencyService:
 
     @classmethod
     async def _fetch_rates(cls, base: str) -> dict:
-        """Hit Frankfurter API and return the rates dict."""
+        """Hit ExchangeRate-API open endpoint and return the rates dict."""
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.get(
-                    f"{_API_BASE}/latest",
-                    params={'from': base}
-                )
+                response = await client.get(f"{_API_BASE}/{base}")
+                if response.status_code == 429:
+                    raise ValueError(
+                        f"Exchange rate API rate limit hit for {base}. Try again in ~20 minutes."
+                    )
                 response.raise_for_status()
                 data = response.json()
+                if data.get('result') != 'success':
+                    error_type = data.get('error-type', 'unknown')
+                    raise ValueError(
+                        f"Exchange rate API error for {base}: {error_type}"
+                    )
                 return data.get('rates', {})
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error fetching rates for {base}: {e}")

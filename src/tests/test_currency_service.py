@@ -12,8 +12,9 @@ from services.currency_service import CurrencyService, _rate_cache, _CACHE_TTL
 def _mock_http_response(rates: dict) -> MagicMock:
     """Build a mock httpx Response that returns the given rates dict."""
     response = MagicMock()
+    response.status_code = 200
     response.raise_for_status = MagicMock()
-    response.json.return_value = {'rates': rates}
+    response.json.return_value = {'result': 'success', 'rates': rates}
     return response
 
 
