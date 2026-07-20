@@ -386,30 +386,37 @@ class ExpenseKeyboard:
         cls,
         expense_id: int,
         group_id: int,
-        can_modify: bool = False
+        can_edit: bool = False,
+        can_delete: bool = False
     ) -> InlineKeyboardMarkup:
         """
         Keyboard for expense detail view with edit, delete, and back buttons.
-        
+
         Args:
             expense_id: int - The expense ID for edit/delete actions.
             group_id: int - The group ID for back navigation.
-            can_modify: bool - Whether to show edit/delete buttons.
+            can_edit: bool - Whether to show the edit button (blocked once settled).
+            can_delete: bool - Whether to show the delete button (creator/payer only).
         """
         buttons = []
-        
-        # Edit and Delete buttons (only if user can modify)
-        if can_modify:
-            buttons.append([
+
+        action_row = []
+        if can_edit:
+            action_row.append(
                 InlineKeyboardButton(
                     "Edit",
                     callback_data=cls._build_callback_data(cls.ACTION_EDIT, str(expense_id))
-                ),
+                )
+            )
+        if can_delete:
+            action_row.append(
                 InlineKeyboardButton(
                     "Delete",
                     callback_data=cls._build_callback_data(cls.ACTION_DELETE, str(expense_id))
                 )
-            ])
+            )
+        if action_row:
+            buttons.append(action_row)
         
         buttons.append([
             InlineKeyboardButton(

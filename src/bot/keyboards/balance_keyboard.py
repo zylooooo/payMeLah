@@ -109,14 +109,15 @@ class BalanceKeyboard:
         """
         buttons = []
 
-        # Settle up button (only if there are debts)
+        # Settle up button (only if there are debts).
+        # "group" mode: record a payment for any outstanding debt in the group.
         if has_debts:
             buttons.append([
                 InlineKeyboardButton(
                     "Settle Up",
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SETTLE_UP,
-                        str(group_id)
+                        f"group:{group_id}"
                     )
                 )
             ])
@@ -190,14 +191,15 @@ class BalanceKeyboard:
         """
         buttons = []
 
-        # Settle up button (only if user owes money)
+        # Settle up button (only if user owes money).
+        # "user" mode: settle the presser's own debts.
         if owes_money:
             buttons.append([
                 InlineKeyboardButton(
                     "Settle My Debts",
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SETTLE_UP,
-                        str(group_id)
+                        f"user:{group_id}"
                     )
                 )
             ])

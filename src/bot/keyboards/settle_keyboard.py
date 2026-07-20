@@ -51,6 +51,45 @@ class SettleKeyboard:
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
+    def get_debt_selection_keyboard(
+        cls,
+        debts: List[dict],
+        member_names: dict,
+        currency: str
+    ) -> InlineKeyboardMarkup:
+        """
+        Group mode: show every outstanding debt in the group as a selectable button.
+
+        Args:
+            debts: debts list from BalanceService (each has from_user_id,
+                   to_user_id, amount).
+            member_names: {user_id: display_name} lookup for labels.
+            currency: The group currency code.
+        """
+        buttons = []
+        for debt in debts:
+            from_name = member_names.get(debt['from_user_id'], f"User {debt['from_user_id']}")
+            to_name = member_names.get(debt['to_user_id'], f"User {debt['to_user_id']}")
+            label = f"{from_name} → {to_name}  ({currency} {debt['amount']:,.2f})"
+            buttons.append([
+                InlineKeyboardButton(
+                    label,
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_SELECT,
+                        f"{debt['from_user_id']}:{debt['to_user_id']}"
+                    )
+                )
+            ])
+
+        buttons.append([
+            InlineKeyboardButton(
+                "X Cancel",
+                callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
+            )
+        ])
+        return InlineKeyboardMarkup(buttons)
+
+    @classmethod
     def get_amount_keyboard(cls, full_amount: Decimal, currency: str) -> InlineKeyboardMarkup:
         """Confirm full amount or let user type a custom amount."""
         return InlineKeyboardMarkup([

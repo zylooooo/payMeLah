@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
-from models import Expense, ExpenseParticipant, ExpenseSplitType, Group
+from models import Expense, ExpenseParticipant, ExpenseSplitType, Group, Payment
 from shared import (
     ExpenseNotFoundException,
     ExpenseValidationException,
@@ -467,17 +467,17 @@ class ExpenseService:
         return expense_dict
     
     @staticmethod
-    async def _assert_modifiable(
+    async def _assert_authorized(
         db: AsyncSession,
         expense_id: int,
         requesting_user_id: int
     ) -> 'Expense':
         """
-        Raise the appropriate exception if the user cannot modify this expense.
+        Raise if the expense doesn't exist or the user is neither creator nor payer.
         Returns the Expense ORM object when the check passes.
 
         Raises:
-            ExpenseNotFoundException, UnauthorizedActionException, ExpenseNotEditableException.
+            ExpenseNotFoundException, UnauthorizedActionException.
         """
         result = await db.execute(select(Expense).where(Expense.id == expense_id))
         expense = result.scalar_one_or_none()
@@ -487,6 +487,25 @@ class ExpenseService:
         if expense.created_by != requesting_user_id and expense.payer_id != requesting_user_id:
             logger.debug(f"User {requesting_user_id} is neither creator nor payer of expense {expense_id}")
             raise UnauthorizedActionException("You can only modify expenses you created or paid for.")
+
+        return expense
+
+    @staticmethod
+    async def _assert_modifiable(
+        db: AsyncSession,
+        expense_id: int,
+        requesting_user_id: int
+    ) -> 'Expense':
+        """
+        Raise the appropriate exception if the user cannot edit this expense.
+        Editing is blocked once any non-payer participant has settled their share;
+        deletion is not (see delete_expense).
+        Returns the Expense ORM object when the check passes.
+
+        Raises:
+            ExpenseNotFoundException, UnauthorizedActionException, ExpenseNotEditableException.
+        """
+        expense = await ExpenseService._assert_authorized(db, expense_id, requesting_user_id)
 
         result = await db.execute(
             select(ExpenseParticipant).where(
@@ -512,11 +531,11 @@ class ExpenseService:
         requesting_user_id: int
     ) -> tuple[bool, str]:
         """
-        Check if a user can modify (edit/delete) an expense.
+        Check if a user can edit an expense.
 
         Authorization rules:
-        - Only creator or payer can modify
-        - Cannot modify if any participant (other than payer) has settled
+        - Only creator or payer can edit
+        - Cannot edit if any participant (other than payer) has settled
 
         Returns:
             tuple[bool, str] - (can_modify, reason_if_not)
@@ -528,13 +547,86 @@ class ExpenseService:
             return False, str(e)
 
     @staticmethod
+    async def can_delete_expense(
+        db: AsyncSession,
+        expense_id: int,
+        requesting_user_id: int
+    ) -> tuple[bool, str]:
+        """
+        Check if a user can delete an expense.
+
+        Authorization rules:
+        - Only creator or payer can delete
+        - Settlement status does not block deletion
+
+        Returns:
+            tuple[bool, str] - (can_delete, reason_if_not)
+        """
+        try:
+            await ExpenseService._assert_authorized(db, expense_id, requesting_user_id)
+            return True, ""
+        except (ExpenseNotFoundException, UnauthorizedActionException) as e:
+            return False, str(e)
+
+    @staticmethod
+    async def has_related_settlements(
+        db: AsyncSession,
+        expense_id: int
+    ) -> bool:
+        """
+        Check whether this expense's debt may already have been settled:
+        a non-payer participant is marked settled, OR any non-payer participant
+        has a recorded payment to the payer in the same group (/settleup records
+        payments without setting participant is_settled flags).
+
+        Used to warn before deletion — deleting the expense removes the debt but
+        never the payments, so balances may shift.
+
+        Raises:
+            ExpenseNotFoundException - If expense doesn't exist.
+        """
+        result = await db.execute(select(Expense).where(Expense.id == expense_id))
+        expense = result.scalar_one_or_none()
+        if not expense:
+            raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
+
+        result = await db.execute(
+            select(ExpenseParticipant.user_id, ExpenseParticipant.is_settled).where(
+                and_(
+                    ExpenseParticipant.expense_id == expense_id,
+                    ExpenseParticipant.user_id != expense.payer_id
+                )
+            )
+        )
+        rows = result.all()
+        if not rows:
+            return False
+        if any(is_settled for _, is_settled in rows):
+            return True
+
+        participant_ids = [user_id for user_id, _ in rows]
+        result = await db.execute(
+            select(Payment.id).where(
+                and_(
+                    Payment.group_id == expense.group_id,
+                    Payment.to_user_id == expense.payer_id,
+                    Payment.from_user_id.in_(participant_ids)
+                )
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
     async def delete_expense(
         db: AsyncSession,
         expense_id: int,
         requesting_user_id: int
     ) -> bool:
         """
-        Delete an expense and all its participants.
+        Delete an expense and all its participants (cascade).
+        Settled expenses can be deleted too — balances are recomputed live from
+        the remaining data, but recorded payments are untouched, so net balances
+        may shift after deleting an already-settled expense.
 
         Args:
             db: AsyncSession - The database session.
@@ -547,10 +639,9 @@ class ExpenseService:
         Raises:
             ExpenseNotFoundException - If expense doesn't exist.
             UnauthorizedActionException - If user cannot delete this expense.
-            ExpenseNotEditableException - If expense has settled participants.
         """
         logger.info(f"User {requesting_user_id} attempting to delete expense {expense_id}")
-        expense = await ExpenseService._assert_modifiable(db, expense_id, requesting_user_id)
+        expense = await ExpenseService._assert_authorized(db, expense_id, requesting_user_id)
         await db.delete(expense)
         await db.commit()
         logger.info(f"Expense {expense_id} deleted successfully by user {requesting_user_id}")

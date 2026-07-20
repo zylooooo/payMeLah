@@ -9,8 +9,7 @@ from models import ExpenseCategory, CATEGORY_DISPLAY
 from shared import (
     ExpenseNotFoundException,
     UnauthorizedActionException,
-    GroupNotFoundException,
-    ExpenseNotEditableException
+    GroupNotFoundException
 )
 from datetime import datetime, date
 import logging
@@ -434,17 +433,21 @@ async def _show_expense_details(
                 if payer_user:
                     payer_name = get_display_name(payer_user)
             
-            # Check if user can modify this expense
-            can_modify, _ = await ExpenseService.can_modify_expense(
+            # Editing is blocked once settled; deletion only needs authorization
+            can_edit, _ = await ExpenseService.can_modify_expense(
                 db, expense_id, telegram_user.id
             )
-        
+            can_delete, _ = await ExpenseService.can_delete_expense(
+                db, expense_id, telegram_user.id
+            )
+
         message = _format_expense_details(expense_data, expense_data.get('participants', []), payer_name)
         group_id = expense_data.get('group_id')
         keyboard = ExpenseKeyboard.get_expense_details_keyboard(
             expense_id=expense_id,
             group_id=group_id,
-            can_modify=can_modify
+            can_edit=can_edit,
+            can_delete=can_delete
         )
         
         await query.edit_message_text(
@@ -632,23 +635,36 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
         
         try:
             expense_id = int(data)
-            
+
             # Check authorization before showing confirmation
             async with get_db() as db:
-                can_modify, reason = await ExpenseService.can_modify_expense(
+                can_delete, reason = await ExpenseService.can_delete_expense(
                     db, expense_id, telegram_user.id
                 )
-            
-            if not can_modify:
+                has_settlement_risk = False
+                if can_delete:
+                    has_settlement_risk = await ExpenseService.has_related_settlements(
+                        db, expense_id
+                    )
+
+            if not can_delete:
                 # Show error in the message since query.answer() was already called
                 await query.edit_message_text(f"Cannot delete: {reason}")
                 return
-            
+
             # Show delete confirmation
+            warning = ""
+            if has_settlement_risk:
+                warning = (
+                    "⚠️ This expense may already have been settled — payments "
+                    "related to it will NOT be removed, so group balances "
+                    "may shift after deletion.\n\n"
+                )
             keyboard = ExpenseKeyboard.get_delete_confirmation_keyboard(expense_id)
             await query.edit_message_text(
                 "<b>Delete Expense</b>\n\n"
                 "Are you sure you want to delete this expense?\n\n"
+                f"{warning}"
                 "This action cannot be undone.",
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -695,8 +711,6 @@ async def handle_expense_view_callback(update: Update, context: ContextTypes.DEF
         except ExpenseNotFoundException:
             await query.edit_message_text("Expense not found. It may have already been deleted.")
         except UnauthorizedActionException as e:
-            await query.edit_message_text(str(e))
-        except ExpenseNotEditableException as e:
             await query.edit_message_text(str(e))
         except ValueError:
             await query.edit_message_text("Invalid expense ID.")
