@@ -1,13 +1,11 @@
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes, CallbackQueryHandler
-from typing import List, Optional
 from decimal import Decimal
 from infrastructure import get_db
 from services import GroupService, UserService
 from services.balance_service import BalanceService
 from services.payment_service import PaymentService
-from bot.keyboards import GroupKeyboard
 from bot.keyboards.balance_keyboard import BalanceKeyboard
 from bot.utils import (
     validate_chat_type, h, rate_limit, ERROR_MSG, get_display_name,
@@ -176,119 +174,6 @@ async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(ERROR_MSG)
 
 
-@rate_limit
-@validate_chat_type("private", "group", "supergroup")
-async def mybalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /mybalance command handler.
-    Shows the current user's balance in a specific group.
-    """
-    chat_type = update.effective_chat.type
-    telegram_user = update.effective_user
-
-    if not telegram_user:
-        logger.warning("Received /mybalance command without telegram user")
-        return
-
-    if chat_type == "private":
-        # Private chat - show group selection
-        logger.info(f"User {telegram_user.id} requested mybalance in private chat")
-
-        try:
-            async with get_db() as db:
-                groups = await GroupService.get_all_groups_by_user_id(db, telegram_user.id)
-
-                if not groups:
-                    await update.message.reply_text(
-                        "You are not a member of any groups yet.\n"
-                        "Join or create a group to start tracking balances!"
-                    )
-                    return
-
-                # Store groups for pagination
-                context.user_data['balance_groups'] = groups
-                context.user_data['balance_groups_page'] = 0
-
-                message = (
-                    "<b>View My Balance</b>\n\n"
-                    "Select a group to view your balance:"
-                )
-                keyboard = BalanceKeyboard.get_group_selection_keyboard(
-                    groups, page=0, action_prefix="mybalance"
-                )
-
-                await update.message.reply_text(
-                    message,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
-        except Exception as e:
-            logger.error(f"Error in mybalance command: {e}", exc_info=True)
-            await update.message.reply_text(ERROR_MSG)
-
-    else:
-        # Group chat
-        telegram_chat_id = update.effective_chat.id
-        logger.info(f"Showing user balance in chat {telegram_chat_id}")
-
-        try:
-            async with get_db() as db:
-                groups = await GroupService.get_group_by_chat_id(db, telegram_chat_id)
-
-                if not groups:
-                    await update.message.reply_text(
-                        "No expense groups found in this chat.\n"
-                        "Create one with /newgroup first!"
-                    )
-                    return
-
-                # Check if user is member of any group
-                user_groups = [
-                    g for g in groups
-                    if await GroupService.is_member(db, g['id'], telegram_user.id)
-                ]
-
-                if not user_groups:
-                    await update.message.reply_text(
-                        "You are not a member of any expense groups in this chat.\n"
-                        "Use /groups to join one!"
-                    )
-                    return
-
-                if len(user_groups) == 1:
-                    # Single group - show balance directly
-                    async with get_db() as db:
-                        simplify = await _get_effective_simplify(db, user_groups[0]['id'], telegram_user.id, context)
-                    sent = await _show_user_balance(
-                        update, context, user_groups[0]['id'], telegram_user.id, simplify=simplify
-                    )
-                    if sent:
-                        context.chat_data[f'kbd_owner_{sent.message_id}'] = telegram_user.id
-                else:
-                    # Multiple groups — store per-user and track chat for re-fetch
-                    context.user_data['balance_groups'] = user_groups
-                    context.user_data['balance_groups_page'] = 0
-                    context.user_data['balance_chat_id'] = telegram_chat_id
-
-                    message = (
-                        "<b>View My Balance</b>\n\n"
-                        "Select a group to view your balance:"
-                    )
-                    keyboard = BalanceKeyboard.get_group_selection_keyboard(
-                        user_groups, page=0, action_prefix="mybalance"
-                    )
-
-                    sent = await update.message.reply_text(
-                        message,
-                        parse_mode="HTML",
-                        reply_markup=keyboard
-                    )
-                    context.chat_data[f'kbd_owner_{sent.message_id}'] = telegram_user.id
-        except Exception as e:
-            logger.error(f"Error in mybalance command: {e}", exc_info=True)
-            await update.message.reply_text(ERROR_MSG)
-
-
 
 async def _show_group_balances(
     update: Update,
@@ -307,7 +192,10 @@ async def _show_group_balances(
             is_private = (update.effective_chat.type == "private") if update.effective_chat else False
             message = _format_group_balances_message(balances, is_private=is_private)
             has_debts = len(balances['debts']) > 0
-            keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
+            has_owed_by = any(d['to_user_id'] == user_id for d in balances['debts'])
+            keyboard = BalanceKeyboard.get_group_balances_keyboard(
+                group_id, has_debts, is_simplified=simplify, has_owed_by=has_owed_by
+            )
 
             if edit_message and update.callback_query:
                 await update.callback_query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
@@ -319,42 +207,6 @@ async def _show_group_balances(
         await _send_error(update, "You are not a member of this group.", edit_message)
     except Exception as e:
         logger.error(f"Error showing group balances: {e}", exc_info=True)
-        await _send_error(update, ERROR_MSG, edit_message)
-    return None
-
-
-async def _show_user_balance(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    group_id: int,
-    user_id: int,
-    edit_message: bool = False,
-    simplify: bool = True
-):
-    """Show a user's balance in a specific group. Returns the sent Message when using reply_text, else None."""
-    try:
-        async with get_db() as db:
-            balance = await BalanceService.get_user_balance_in_group(
-                db, group_id, user_id, simplify=simplify
-            )
-            message = _format_user_balance_message(balance)
-            has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
-            owes_money = len(balance['owes_to']) > 0
-            has_owed_by = len(balance['owed_by']) > 0
-            keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
-            )
-
-            if edit_message and update.callback_query:
-                await update.callback_query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
-                return None
-            return await update.message.reply_text(message, parse_mode="HTML", reply_markup=keyboard)
-    except GroupNotFoundException:
-        await _send_error(update, "Group not found.", edit_message)
-    except UnauthorizedActionException:
-        await _send_error(update, "You are not a member of this group.", edit_message)
-    except Exception as e:
-        logger.error(f"Error showing user balance: {e}", exc_info=True)
         await _send_error(update, ERROR_MSG, edit_message)
     return None
 
@@ -439,67 +291,11 @@ def _format_group_balances_message(balances: dict, is_private: bool = False) -> 
             message += "  My balance:              Settled up\n"
     elif not is_private:
         # Group chat always shows the hint — personal stats are only visible in private chat
-        message += "\n💡 <i>Send me a private message to check your personal balance for this group.</i>\n"
+        message += "\n💡 <i>Send me a private message to see your personal stats for this group.</i>\n"
 
     return message
 
 
-def _format_user_balance_message(balance: dict) -> str:
-    """Format the user balance message."""
-    group = balance['group']
-    net_balance = balance['net_balance']
-    owes_to = balance['owes_to']
-    owed_by = balance['owed_by']
-    currency = balance['currency']
-    conversion_warnings = balance.get('conversion_warnings', [])
-
-    message = f"<b>My Balance: {h(group['name'])}</b>\n"
-    message += f"<i>Currency: {h(currency)}</i>\n\n"
-
-    if conversion_warnings:
-        pairs = ", ".join(conversion_warnings)
-        message += (
-            f"⚠️ <i>Could not convert rates for: {pairs}. "
-            "Some amounts may be in their original currency.</i>\n\n"
-        )
-
-    # Net balance summary
-    if net_balance > 0:
-        message += f"<b>You are owed {_format_amount(net_balance, currency)}</b>\n\n"
-    elif net_balance < 0:
-        message += f"<b>You owe {_format_amount(abs(net_balance), currency)}</b>\n\n"
-    else:
-        message += "<b>You are all settled up!</b>\n\n"
-
-    # Who owes you
-    if owed_by:
-        message += "<b>People who owe you:</b>\n"
-        for debt in owed_by:
-            name = get_display_name(debt)
-            message += f"  {name}: {_format_amount(debt['amount'], currency)}\n"
-        message += "\n"
-
-    # Who you owe
-    if owes_to:
-        message += "<b>You owe:</b>\n"
-        for debt in owes_to:
-            name = get_display_name(debt)
-            message += f"  {name}: {_format_amount(debt['amount'], currency)}\n"
-        message += "\n"
-
-    # Spend stats — always show so users can see their contribution even when settled
-    total_paid = balance.get('total_paid')
-    total_share = balance.get('total_share')
-    total_spend = balance.get('total_spend')
-    if total_spend is not None and total_spend > 0:
-        message += "<b>Your Stats:</b>\n"
-        if total_paid is not None:
-            message += f"  Paid:        {_format_amount(total_paid, currency)}\n"
-        if total_share is not None:
-            message += f"  Your share:  {_format_amount(total_share, currency)}\n"
-        message += f"  Group total: {_format_amount(total_spend, currency)}\n"
-
-    return message
 
 
 
@@ -579,7 +375,7 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if action == BalanceKeyboard.ACTION_BACK:
-        # Re-render the user balance view for this group
+        # Back from nudge picker → re-render group balances
         group_id_str = data
         try:
             group_id = int(group_id_str)
@@ -588,15 +384,14 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         async with get_db() as db:
             simplify = await _get_effective_simplify(db, group_id, telegram_user.id, context)
-            balance = await BalanceService.get_user_balance_in_group(
+            balances = await BalanceService.get_group_balances(
                 db, group_id, telegram_user.id, simplify=simplify
             )
-        message = _format_user_balance_message(balance)
-        has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
-        owes_money = len(balance['owes_to']) > 0
-        has_owed_by = len(balance['owed_by']) > 0
-        keyboard = BalanceKeyboard.get_user_balance_keyboard(
-            group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
+        message = _format_group_balances_message(balances, is_private=is_private)
+        has_debts = len(balances['debts']) > 0
+        has_owed_by = any(d['to_user_id'] == telegram_user.id for d in balances['debts'])
+        keyboard = BalanceKeyboard.get_group_balances_keyboard(
+            group_id, has_debts, is_simplified=simplify, has_owed_by=has_owed_by
         )
         await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
         return
@@ -619,42 +414,33 @@ async def _handle_group_selection(
         return
 
     parts = data.split(':')
-    action_type = parts[0]  # "balances" or "mybalance"
+    action_type = parts[0]  # "balances"
     group_id = int(parts[1])
 
     try:
         async with get_db() as db:
             simplify = await _get_effective_simplify(db, group_id, user_id, context)
-            if action_type == "balances":
-                balances = await BalanceService.get_group_balances(
-                    db, group_id, user_id, simplify=simplify
-                )
-                message = _format_group_balances_message(balances, is_private=is_private)
-                has_debts = len(balances['debts']) > 0
-                keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
-            else:
-                balance = await BalanceService.get_user_balance_in_group(
-                    db, group_id, user_id, simplify=simplify
-                )
-                message = _format_user_balance_message(balance)
-                has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
-                owes_money = len(balance['owes_to']) > 0
-                has_owed_by = len(balance['owed_by']) > 0
-                keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                    group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
-                )
-
-            # Store current view for refresh
-            context.user_data['balance_view'] = {
-                'type': action_type,
-                'group_id': group_id
-            }
-
-            await query.edit_message_text(
-                message,
-                parse_mode="HTML",
-                reply_markup=keyboard
+            balances = await BalanceService.get_group_balances(
+                db, group_id, user_id, simplify=simplify
             )
+        message = _format_group_balances_message(balances, is_private=is_private)
+        has_debts = len(balances['debts']) > 0
+        has_owed_by = any(d['to_user_id'] == user_id for d in balances['debts'])
+        keyboard = BalanceKeyboard.get_group_balances_keyboard(
+            group_id, has_debts, is_simplified=simplify, has_owed_by=has_owed_by
+        )
+
+        # Store current view for refresh
+        context.user_data['balance_view'] = {
+            'type': 'balances',
+            'group_id': group_id
+        }
+
+        await query.edit_message_text(
+            message,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
     except GroupNotFoundException:
         await query.edit_message_text("Group not found.")
     except UnauthorizedActionException:
@@ -689,12 +475,7 @@ async def _handle_pagination(
 
     context.user_data['balance_groups_page'] = page
 
-    if action_prefix == "balances":
-        title = "View Group Balances"
-    else:
-        title = "View My Balance"
-
-    message = f"<b>{title}</b>\n\nSelect a group:"
+    message = "<b>View Group Balances</b>\n\nSelect a group:"
     keyboard = BalanceKeyboard.get_group_selection_keyboard(
         groups, page=page, action_prefix=action_prefix
     )
@@ -719,37 +500,27 @@ async def _handle_refresh(
         return
 
     parts = data.split(':')
-    view_type = parts[0]  # "group" or "user"
     group_id = int(parts[1])
 
     try:
         async with get_db() as db:
             simplify = await _get_effective_simplify(db, group_id, user_id, context)
-            if view_type == "group":
-                balances = await BalanceService.get_group_balances(
-                    db, group_id, user_id, simplify=simplify
-                )
-                message = _format_group_balances_message(balances, is_private=is_private)
-                has_debts = len(balances['debts']) > 0
-                keyboard = BalanceKeyboard.get_group_balances_keyboard(group_id, has_debts, is_simplified=simplify)
-            else:  # user
-                balance = await BalanceService.get_user_balance_in_group(
-                    db, group_id, user_id, simplify=simplify
-                )
-                message = _format_user_balance_message(balance)
-                has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
-                owes_money = len(balance['owes_to']) > 0
-                has_owed_by = len(balance['owed_by']) > 0
-                keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                    group_id, has_debts, owes_money, is_simplified=simplify, has_owed_by=has_owed_by
-                )
-
-            await query.edit_message_text(
-                message,
-                parse_mode="HTML",
-                reply_markup=keyboard
+            balances = await BalanceService.get_group_balances(
+                db, group_id, user_id, simplify=simplify
             )
-            await query.answer("Refreshed!")
+        message = _format_group_balances_message(balances, is_private=is_private)
+        has_debts = len(balances['debts']) > 0
+        has_owed_by = any(d['to_user_id'] == user_id for d in balances['debts'])
+        keyboard = BalanceKeyboard.get_group_balances_keyboard(
+            group_id, has_debts, is_simplified=simplify, has_owed_by=has_owed_by
+        )
+
+        await query.edit_message_text(
+            message,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+        await query.answer("Refreshed!")
     except BadRequest as e:
         # Handle "message is not modified" error gracefully
         if "message is not modified" in str(e).lower():
@@ -774,7 +545,7 @@ async def _handle_toggle_simplify(
         await query.answer("Invalid toggle data.", show_alert=True)
         return
 
-    view_type, group_id_str = data.split(':', 1)
+    _, group_id_str = data.split(':', 1)
     group_id = int(group_id_str)
 
     # Flip the in-view simplify state (default True if not yet set)
@@ -786,27 +557,15 @@ async def _handle_toggle_simplify(
 
     try:
         async with get_db() as db:
-            if view_type == "group":
-                balances = await BalanceService.get_group_balances(
-                    db, group_id, user_id, simplify=new_simplify
-                )
-                message = _format_group_balances_message(balances, is_private=is_private)
-                has_debts = len(balances['debts']) > 0
-                keyboard = BalanceKeyboard.get_group_balances_keyboard(
-                    group_id, has_debts, is_simplified=new_simplify
-                )
-            else:
-                balance = await BalanceService.get_user_balance_in_group(
-                    db, group_id, user_id, simplify=new_simplify
-                )
-                message = _format_user_balance_message(balance)
-                has_debts = len(balance['owes_to']) > 0 or len(balance['owed_by']) > 0
-                owes_money = len(balance['owes_to']) > 0
-                has_owed_by = len(balance['owed_by']) > 0
-                keyboard = BalanceKeyboard.get_user_balance_keyboard(
-                    group_id, has_debts, owes_money, is_simplified=new_simplify, has_owed_by=has_owed_by
-                )
-
+            balances = await BalanceService.get_group_balances(
+                db, group_id, user_id, simplify=new_simplify
+            )
+        message = _format_group_balances_message(balances, is_private=is_private)
+        has_debts = len(balances['debts']) > 0
+        has_owed_by = any(d['to_user_id'] == user_id for d in balances['debts'])
+        keyboard = BalanceKeyboard.get_group_balances_keyboard(
+            group_id, has_debts, is_simplified=new_simplify, has_owed_by=has_owed_by
+        )
         await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
     except GroupNotFoundException:
         await query.edit_message_text("Group not found.")
@@ -826,10 +585,6 @@ async def _handle_back_to_list(
     """Handle back to group list navigation."""
     groups = context.user_data.get('balance_groups', [])
     page = context.user_data.get('balance_groups_page', 0)
-
-    # Determine action prefix from stored view
-    balance_view = context.user_data.get('balance_view', {})
-    action_prefix = balance_view.get('type', 'balances')
 
     if not groups:
         # Re-fetch groups, respecting the original chat scope
@@ -853,14 +608,9 @@ async def _handle_back_to_list(
         await query.edit_message_text("You are not a member of any groups.")
         return
 
-    if action_prefix == "balances":
-        title = "View Group Balances"
-    else:
-        title = "View My Balance"
-
-    message = f"<b>{title}</b>\n\nSelect a group:"
+    message = "<b>View Group Balances</b>\n\nSelect a group:"
     keyboard = BalanceKeyboard.get_group_selection_keyboard(
-        groups, page=page, action_prefix=action_prefix
+        groups, page=page, action_prefix="balances"
     )
 
     await query.edit_message_text(
@@ -1024,7 +774,7 @@ async def _handle_nudge_send(query, context, data: str, nudger_id: int) -> None:
         dm_text = (
             f"👋 Hey! Just a reminder — you owe <b>{h(nudger_name)}</b> "
             f"<b>{amount_str}</b> in the group <b>{h(group_name)}</b>.\n\n"
-            "Use /mybalance to check your balance and settle up!"
+            "Use /balances to check the group balance and settle up!"
         )
 
         sent_dm = False
@@ -1044,7 +794,7 @@ async def _handle_nudge_send(query, context, data: str, nudger_id: int) -> None:
                 group_text = (
                     f"{mention} Hey! Just a reminder that you have a pending "
                     f"balance in <b>{h(group_name)}</b>. "
-                    "Use /mybalance to check your balance!"
+                    "Use /balances to check the group balance!"
                 )
                 try:
                     await context.bot.send_message(

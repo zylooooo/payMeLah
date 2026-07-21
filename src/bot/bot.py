@@ -12,7 +12,6 @@ from bot.handlers import (
     expenses_command,
     create_expense_view_callback_handler,
     balances_command,
-    mybalance_command,
     create_balance_callback_handler
 )
 from bot.conversations import (
@@ -68,7 +67,6 @@ class Bot:
         self.app.add_handler(CommandHandler('groups', groups_command))
         self.app.add_handler(CommandHandler('expenses', expenses_command))
         self.app.add_handler(CommandHandler('balances', balances_command))
-        self.app.add_handler(CommandHandler('mybalance', mybalance_command))
 
         # Add callback query handlers (these run after stale handler validation)
         self.app.add_handler(create_group_callback_handler())

@@ -5,7 +5,6 @@ from .group_handler import groups_command, handle_group_callback, create_group_c
 from .expense_handler import expenses_command, handle_expense_view_callback, create_expense_view_callback_handler
 from .balance_handler import (
     balances_command,
-    mybalance_command,
     handle_balance_callback,
     create_balance_callback_handler
 )
@@ -21,7 +20,6 @@ __all__ = [
     "handle_expense_view_callback",
     "create_expense_view_callback_handler",
     "balances_command",
-    "mybalance_command",
     "handle_balance_callback",
     "create_balance_callback_handler"
 ]

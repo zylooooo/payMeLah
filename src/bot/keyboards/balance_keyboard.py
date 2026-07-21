@@ -37,7 +37,7 @@ class BalanceKeyboard:
             groups: List of group dictionaries.
             page: Current page number.
             per_page: Number of groups per page.
-            action_prefix: Prefix for action context (balances, mybalance, etc.)
+            action_prefix: Prefix for action context (balances).
         """
         buttons = []
 
@@ -97,7 +97,8 @@ class BalanceKeyboard:
         cls,
         group_id: int,
         has_debts: bool = True,
-        is_simplified: bool = True
+        is_simplified: bool = True,
+        has_owed_by: bool = False,
     ) -> InlineKeyboardMarkup:
         """
         Generate keyboard for group balances view.
@@ -106,6 +107,7 @@ class BalanceKeyboard:
             group_id: The group ID.
             has_debts: Whether there are outstanding debts to settle.
             is_simplified: Whether the current view is showing simplified debts.
+            has_owed_by: Whether someone owes the viewing user money (show Nudge button).
         """
         buttons = []
 
@@ -118,6 +120,18 @@ class BalanceKeyboard:
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SETTLE_UP,
                         f"group:{group_id}"
+                    )
+                )
+            ])
+
+        # Nudge button (only if someone owes the viewing user)
+        if has_owed_by:
+            buttons.append([
+                InlineKeyboardButton(
+                    "Nudge",
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_NUDGE,
+                        str(group_id)
                     )
                 )
             ])
@@ -169,90 +183,6 @@ class BalanceKeyboard:
         ])
 
         return InlineKeyboardMarkup(buttons)
-
-    @classmethod
-    def get_user_balance_keyboard(
-        cls,
-        group_id: int,
-        has_debts: bool = True,
-        owes_money: bool = False,
-        is_simplified: bool = True,
-        has_owed_by: bool = False,
-    ) -> InlineKeyboardMarkup:
-        """
-        Generate keyboard for user's balance in a group.
-
-        Args:
-            group_id: The group ID.
-            has_debts: Whether the user has any debts/credits.
-            owes_money: Whether the user owes money (can settle).
-            is_simplified: Whether the current view is showing simplified debts.
-            has_owed_by: Whether someone owes the user money (show Nudge button).
-        """
-        buttons = []
-
-        # Settle up button (only if user owes money).
-        # "user" mode: settle the presser's own debts.
-        if owes_money:
-            buttons.append([
-                InlineKeyboardButton(
-                    "Settle My Debts",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_SETTLE_UP,
-                        f"user:{group_id}"
-                    )
-                )
-            ])
-
-        # Nudge button (only if someone owes the user)
-        if has_owed_by:
-            buttons.append([
-                InlineKeyboardButton(
-                    "Nudge",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_NUDGE,
-                        str(group_id)
-                    )
-                )
-            ])
-
-        # Simplified/raw toggle
-        toggle_label = "View: Simplified ✓" if is_simplified else "View: Raw Debts"
-        buttons.append([
-            InlineKeyboardButton(
-                toggle_label,
-                callback_data=cls._build_callback_data(
-                    cls.ACTION_TOGGLE_SIMPLIFY,
-                    f"user:{group_id}"
-                )
-            )
-        ])
-
-        # Refresh button
-        buttons.append([
-            InlineKeyboardButton(
-                "Refresh",
-                callback_data=cls._build_callback_data(
-                    cls.ACTION_REFRESH,
-                    f"user:{group_id}"
-                )
-            )
-        ])
-
-        # Navigation
-        buttons.append([
-            InlineKeyboardButton(
-                "<< Back to Groups",
-                callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST)
-            ),
-            InlineKeyboardButton(
-                "X Close",
-                callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
-            )
-        ])
-
-        return InlineKeyboardMarkup(buttons)
-
 
     @classmethod
     def get_nudge_person_picker_keyboard(

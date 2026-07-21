@@ -16,7 +16,6 @@ PRIVATE_COMMANDS = [
     BotCommand(command="addexpense", description="Add a new expense to an existing expense group"),
     BotCommand(command="expenses", description="View expenses in your groups"),
     BotCommand(command="balances", description="View all balances in a group"),
-    BotCommand(command="mybalance", description="View your balance in a group")
 ]
 
 GROUP_COMMANDS = [
@@ -25,7 +24,6 @@ GROUP_COMMANDS = [
     BotCommand(command="addexpense", description="Add a new expense to an existing expense group"),
     BotCommand(command="expenses", description="View expenses in this group"),
     BotCommand(command="balances", description="View all balances in a group"),
-    BotCommand(command="mybalance", description="View your balance in this group")
 ]
 
 async def setup_commands(bot: Bot) -> None:

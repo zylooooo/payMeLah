@@ -21,7 +21,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 CONVERSATION_TIMEOUT = 300  # 5 minutes
-EXPIRED_MSG = "This settle session has expired. Please start again from /balances or /mybalance."
+EXPIRED_MSG = "This settle session has expired. Please start again from /balances."
 
 # Flow modes
 MODE_USER = "user"    # "Settle My Debts": presser pays their own debts
@@ -386,7 +386,7 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(
             f"<b>Payment Recorded!</b>\n\n"
             f"{summary}\n\n"
-            "Use /balances or /mybalance to see updated balances.",
+            "Use /balances to see updated balances.",
             parse_mode="HTML"
         )
         return ConversationHandler.END
@@ -409,7 +409,7 @@ async def handle_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.effective_message
     if message is not None:
         try:
-            await message.edit_text("Settle up timed out. Please start again from /balances or /mybalance.")
+            await message.edit_text("Settle up timed out. Please start again from /balances.")
         except Exception:
             # Last update may be the user's own text message (not editable by
             # the bot) or the message may be gone — nothing to disable then.
