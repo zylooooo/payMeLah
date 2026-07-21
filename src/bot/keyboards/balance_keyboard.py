@@ -1,5 +1,6 @@
+from typing import List, Optional, Tuple
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from typing import Optional, Tuple, List
 
 
 class BalanceKeyboard:

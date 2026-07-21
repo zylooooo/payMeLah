@@ -1,15 +1,16 @@
 """initial_migration_with_tz
 
 Revision ID: 1dfa14ced14f
-Revises: 
+Revises:
 Create Date: 2025-12-29 14:32:56.098190
 
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '1dfa14ced14f'

@@ -1,6 +1,8 @@
-from sqlalchemy import Column, BigInteger, String, DateTime, Boolean
+from datetime import datetime, timezone
+
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, String
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone, timedelta
+
 from infrastructure import Base
 
 

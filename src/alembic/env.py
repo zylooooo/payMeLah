@@ -1,26 +1,27 @@
-from logging.config import fileConfig
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-from alembic import context
-import sys
 import re
+import sys
+from logging.config import fileConfig
 from pathlib import Path
+
+from sqlalchemy import engine_from_config, pool
+
+from alembic import context
 
 # Add parent directory to path to import your modules
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Import your Base and models
-from infrastructure.database import Base
 from config import DB_URL
+from infrastructure.database import Base
 
 # Import all models so Alembic can detect them
 from models import (  # noqa: E402, F401
-    User,
-    Group,
-    GroupMember,
     Expense,
     ExpenseParticipant,
-    Payment
+    Group,
+    GroupMember,
+    Payment,
+    User,
 )
 
 # this is the Alembic Config object

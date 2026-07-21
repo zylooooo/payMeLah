@@ -1,22 +1,24 @@
+import logging
+from decimal import Decimal, InvalidOperation
+
 from telegram import Update
 from telegram.ext import (
+    CallbackQueryHandler,
     ContextTypes,
     ConversationHandler,
-    CallbackQueryHandler,
     MessageHandler,
-    filters
+    filters,
 )
-from decimal import Decimal, InvalidOperation
+
+from bot.handlers.balance_handler import _get_effective_simplify
+from bot.keyboards.balance_keyboard import BalanceKeyboard
+from bot.keyboards.settle_keyboard import SettleKeyboard
+from bot.utils import ERROR_MSG, h
 from infrastructure import get_db
 from services.balance_service import BalanceService
 from services.payment_service import PaymentService
-from bot.keyboards.balance_keyboard import BalanceKeyboard
-from bot.keyboards.settle_keyboard import SettleKeyboard
-from bot.handlers.balance_handler import _get_effective_simplify
-from bot.utils import ERROR_MSG, h
-from .states import SettleStates
-import logging
 
+from .states import SettleStates
 
 logger = logging.getLogger(__name__)
 

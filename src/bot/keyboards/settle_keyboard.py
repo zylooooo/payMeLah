@@ -1,6 +1,7 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from decimal import Decimal
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 class SettleKeyboard:

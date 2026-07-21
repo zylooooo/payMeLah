@@ -1,11 +1,13 @@
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from typing import Optional, Tuple
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 
 class UpdateKeyboard:
     """Class to create inline keyboards for updating user information."""
 
     PREFIX = "update_profile_"
-    
+
     # Field names
     FIELD_FIRST_NAME = "first_name"
     FIELD_LAST_NAME = "last_name"
@@ -137,18 +139,18 @@ class UpdateKeyboard:
     def extract_callback_info(cls, callback_data: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Extract action and field from callback data.
-        
+
         Args:
             callback_data: The callback data string
-            
+
         Returns:
             Tuple of (action, field) or (None, None) if invalid
         """
         if not callback_data or not callback_data.startswith(cls.PREFIX):
             return None, None
-        
+
         data = callback_data[len(cls.PREFIX):]
-        
+
         if ':' in data:
             action, field = data.split(':', 1)
             return action, field
@@ -159,4 +161,3 @@ class UpdateKeyboard:
     def matches_prefix(cls, callback_data: str) -> bool:
         """Check if callback data matches this keyboard's prefix."""
         return callback_data and callback_data.startswith(cls.PREFIX)
-    

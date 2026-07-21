@@ -7,9 +7,9 @@ Create Date: 2025-01-02
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'a1b2c3d4e5f6'
@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add telegram_chat_id column to groups table."""
-    op.add_column('groups', 
+    op.add_column('groups',
         sa.Column('telegram_chat_id', sa.BigInteger(), nullable=False,
                   comment='Telegram chat ID of the group chat where this expense group is created')
     )

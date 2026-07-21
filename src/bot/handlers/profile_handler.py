@@ -1,9 +1,11 @@
+import logging
+
 from telegram import Update
 from telegram.ext import ContextTypes
+
+from bot.utils import h, validate_chat_type
 from infrastructure import get_db
 from services import UserService
-from bot.utils import validate_chat_type
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +18,13 @@ def _format_profile_message(user: dict) -> str:
             "If you are a new user, please use the /start command to begin using the bot."
         )
 
-    username = user.get('username') or 'Not set'
-    first_name = user.get('first_name') or 'Not set'
-    last_name = user.get('last_name') or 'Not set'
-    preferred_currency = user.get('preferred_currency', 'SGD')
-    simplify_display = "Simplified ✓" if user.get('simplify_debts', True) else "Raw Debts"
+    username = h(user.get("username")) or "Not set"
+    first_name = h(user.get("first_name")) or "Not set"
+    last_name = h(user.get("last_name")) or "Not set"
+    preferred_currency = user.get("preferred_currency", "SGD")
+    simplify_display = "Simplified ✓" if user.get("simplify_debts", True) else "Raw Debts"
 
-    username_display = f"@{username}" if username and username != 'Not set' else username
+    username_display = f"@{username}" if username and username != "Not set" else username
 
     return (
         "<b><u>Your Profile</u></b>\n\n"
@@ -33,10 +35,6 @@ def _format_profile_message(user: dict) -> str:
         f"<b>Debt view preference:</b> {simplify_display}\n\n"
         "Use /update to change any of these settings."
     )
-
-
-# Alias kept so any existing references in other files are not broken
-format_profile_information = _format_profile_message
 
 
 @validate_chat_type("private")

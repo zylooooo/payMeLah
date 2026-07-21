@@ -2,8 +2,10 @@
 Unit tests for SplitCalculator.
 Tests cover all four split types and critical edge cases including rounding.
 """
-import pytest
 from decimal import Decimal
+
+import pytest
+
 from services.split_calculator import SplitCalculator
 from shared import InvalidSplitException
 

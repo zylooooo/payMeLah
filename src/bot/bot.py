@@ -1,28 +1,29 @@
 import asyncio
+import logging
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from config import BOT_API_TOKEN
+
 from bot.config import setup_commands
+from bot.conversations import (
+    create_edit_expense_conversation_handler,
+    create_expense_conversation_handler,
+    create_group_conversation_handler,
+    create_settle_conversation_handler,
+    create_update_conversation_handler,
+)
 from bot.handlers import (
-    start_command,
-    profile_command,
-    groups_command,
+    balances_command,
+    create_balance_callback_handler,
+    create_expense_view_callback_handler,
     create_group_callback_handler,
     expenses_command,
-    create_expense_view_callback_handler,
-    balances_command,
-    create_balance_callback_handler
+    groups_command,
+    profile_command,
+    start_command,
 )
-from bot.conversations import (
-    create_update_conversation_handler,
-    create_group_conversation_handler,
-    create_expense_conversation_handler,
-    create_edit_expense_conversation_handler,
-    create_settle_conversation_handler
-)
+from config import BOT_API_TOKEN
 from infrastructure import close_db
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class Bot:
     async def _setup_commands(self, app: Application):
         """Setup commands after app initialization (has event loop)."""
         await setup_commands(app.bot)
-    
+
     def setup_handlers(self):
         logger.info("Setting up handlers...")
         # Add conversation handlers first (order matters - they should be before command handlers)
@@ -75,17 +76,17 @@ class Bot:
 
         # Add error handler
         self.app.add_error_handler(self.error_handler)
-        
+
         logger.info("Handlers registered successfully")
-    
+
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors in the bot."""
         logger.error("Exception while handling an update", exc_info=context.error)
-    
+
     async def _cleanup(self, app: Application):
         """Cleanup function called when bot shuts down."""
         await close_db()
-    
+
     def start_webhook(self, webhook_url: str, port: int) -> None:
         """Start the bot in webhook mode (production)."""
         logger.info(f"Starting bot in webhook mode on port {port}...")
@@ -93,11 +94,11 @@ class Bot:
 
     async def _run_webhook(self, webhook_url: str, port: int) -> None:
         """Run a Starlette web server that handles Telegram webhook updates."""
+        import uvicorn
         from starlette.applications import Starlette
         from starlette.requests import Request
         from starlette.responses import PlainTextResponse, Response
         from starlette.routing import Route
-        import uvicorn
 
         ptb_app = self.app
 

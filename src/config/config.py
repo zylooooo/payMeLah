@@ -1,6 +1,7 @@
 import os
-from dotenv import load_dotenv
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Get to the root directory of the project from the config.py file
 BASE_DIR = Path(__file__).resolve().parent.parent.parent

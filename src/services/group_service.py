@@ -1,20 +1,21 @@
+import logging
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
-from sqlalchemy.orm import selectinload
+
 from models import Group, GroupMember, GroupMemberRole, User
 from shared import (
-    UserNotFoundException,
-    GroupNotFoundException,
     GroupMemberAlreadyExistsException,
     GroupMemberNotFoundException,
+    GroupNotFoundException,
+    UnauthorizedActionException,
     UnauthorizedGroupJoinException,
-    UnauthorizedActionException
+    UserNotFoundException,
 )
-from .user_service import UserService
-from typing import Optional, Any, List, Dict
-from datetime import timezone, datetime
-import logging
 
+from .user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class GroupService:
         default_currency: str,
         telegram_chat_id: int,
         created_by: int,
-        simplify_debts: bool = True
+        simplify_debts: bool = True,
     ) -> dict:
         """
         Create a new group and add the creator as the owner of the group. By default, they are the first member of the group.
@@ -45,7 +46,7 @@ class GroupService:
             default_currency: str - the default currency that the group's expenses will be shown in.
             telegram_chat_id: int - the Telegram chat ID of the group chat where this expense group is created.
             created_by: int - the Telegram user ID of the user who is creating the group.
-        
+
         Returns:
             dict - A dictionary containing the created group data.
         """
@@ -53,9 +54,7 @@ class GroupService:
 
         user = await UserService.get_user_by_id(db, created_by)
         if not user:
-            raise UserNotFoundException(
-                f"User with ID {created_by} not found."
-            )
+            raise UserNotFoundException(f"User with ID {created_by} not found.")
 
         new_group = Group(
             name=name,
@@ -65,7 +64,7 @@ class GroupService:
             telegram_chat_id=telegram_chat_id,
             created_by=created_by,
             created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc)
+            updated_at=datetime.now(timezone.utc),
         )
         db.add(new_group)
         await db.flush()
@@ -74,20 +73,17 @@ class GroupService:
             group_id=new_group.id,
             user_id=created_by,
             role=GroupMemberRole.OWNER,
-            joined_at=datetime.now(timezone.utc)
+            joined_at=datetime.now(timezone.utc),
         )
         db.add(owner_member)
         await db.commit()
         await db.refresh(new_group)
         logger.info(f"Group '{name}' created successfully")
         return new_group.to_dict()
-        
+
     @staticmethod
     async def join_group(
-        db: AsyncSession,
-        group_id: int,
-        user_data: dict,
-        telegram_group_member_ids: List[int]
+        db: AsyncSession, group_id: int, user_data: dict, telegram_group_member_ids: List[int]
     ) -> bool:
         """
         User joins a group by group ID.
@@ -98,11 +94,11 @@ class GroupService:
             group_id: int - The ID of the group the user is trying to join.
             user_data: dict - The user data of the user who is trying to join the group.
             telegram_group_member_ids: List[int] - The list of Telegram user IDs of all members in the Telegram group chat.
-        
+
         Returns:
             bool - True if the user successfully joined the group, False otherwise.
         """
-        user_id = user_data.get('id')
+        user_id = user_data.get("id")
         logger.info(f"User {user_id} trying to join group {group_id}")
 
         group = await GroupService.get_group_by_id(db, group_id)
@@ -124,16 +120,16 @@ class GroupService:
             user = await UserService.create_user(
                 db,
                 user_id=user_id,
-                username=user_data.get('username'),
-                first_name=user_data.get('first_name'),
-                last_name=user_data.get('last_name')
+                username=user_data.get("username"),
+                first_name=user_data.get("first_name"),
+                last_name=user_data.get("last_name"),
             )
 
         new_member = GroupMember(
             group_id=group_id,
             user_id=user_id,
             role=GroupMemberRole.MEMBER,
-            joined_at=datetime.now(timezone.utc)
+            joined_at=datetime.now(timezone.utc),
         )
         db.add(new_member)
         await db.commit()
@@ -142,7 +138,7 @@ class GroupService:
         return True
 
     @staticmethod
-    async def is_member(db: AsyncSession, group_id: int, user_id: int)-> bool:
+    async def is_member(db: AsyncSession, group_id: int, user_id: int) -> bool:
         """Check if a user with user ID is a member of group with group ID."""
         result = await db.execute(
             select(GroupMember).where(
@@ -159,28 +155,24 @@ class GroupService:
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group to get.
-        
+
         Returns:
             dict - The group data if found, None otherwise.
         """
         logger.info(f"Getting group by ID: {group_id}")
-        result = await db.execute(
-            select(Group).where(Group.id == group_id)
-        )
+        result = await db.execute(select(Group).where(Group.id == group_id))
         group = result.scalar_one_or_none()
 
         if not group:
             logger.warning(f"Group with ID {group_id} not found")
             return None
-        
+
         logger.info(f"Group with ID {group_id} found successfully")
         return group.to_dict()
 
     @staticmethod
     async def get_all_groups_by_user_id(
-        db: AsyncSession,
-        user_id: int,
-        include_archived: bool = False
+        db: AsyncSession, user_id: int, include_archived: bool = False
     ) -> List[dict]:
         """
         Get all groups that a user is a member of.
@@ -194,13 +186,9 @@ class GroupService:
             List[dict] - A list of group data that the user is a member of.
         """
         logger.info(f"Getting all groups that user with ID {user_id} is a member of.")
-        query = (
-            select(Group)
-            .join(GroupMember)
-            .where(GroupMember.user_id == user_id)
-        )
+        query = select(Group).join(GroupMember).where(GroupMember.user_id == user_id)
         if not include_archived:
-            query = query.where(Group.is_archived == False)
+            query = query.where(~Group.is_archived)
         query = query.order_by(Group.created_at.desc())
 
         result = await db.execute(query)
@@ -210,16 +198,16 @@ class GroupService:
 
         logger.info(f"Found {len(group_list)} groups that user with ID {user_id} is a member of.")
         return group_list
-    
+
     @staticmethod
     async def get_group_members(db: AsyncSession, group_id: int) -> List[dict]:
         """
         Get all members of a group.
-        
+
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group.
-        
+
         Returns:
             List[dict] - A list of member dictionaries.
         """
@@ -230,21 +218,23 @@ class GroupService:
             .order_by(GroupMember.joined_at)
         )
         members = result.scalars().all()
-        
+
         members_list = [member.to_dict() for member in members]
         logger.info(f"Found {len(members_list)} members for group ID: {group_id}")
         return members_list
 
     @staticmethod
-    async def get_member_role(db: AsyncSession, group_id: int, user_id: int) -> Optional[GroupMemberRole]:
+    async def get_member_role(
+        db: AsyncSession, group_id: int, user_id: int
+    ) -> Optional[GroupMemberRole]:
         """
         Get the role of a user in a group.
-        
+
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group.
             user_id: int - The ID of the user.
-        
+
         Returns:
             GroupMemberRole | None - The user's role in the group, or None if not a member.
         """
@@ -254,10 +244,10 @@ class GroupService:
             )
         )
         member = result.scalar_one_or_none()
-        
+
         if not member:
             return None
-        
+
         return member.role
 
     @staticmethod
@@ -283,27 +273,29 @@ class GroupService:
         members_with_details = []
         for member, user in result.all():
             member_dict = member.to_dict()
-            member_dict['username'] = user.username
-            member_dict['first_name'] = user.first_name
-            member_dict['last_name'] = user.last_name
+            member_dict["username"] = user.username
+            member_dict["first_name"] = user.first_name
+            member_dict["last_name"] = user.last_name
             members_with_details.append(member_dict)
 
-        logger.info(f"Found {len(members_with_details)} members with details for group ID: {group_id}")
+        logger.info(
+            f"Found {len(members_with_details)} members with details for group ID: {group_id}"
+        )
         return members_with_details
 
     @staticmethod
     async def delete_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> bool:
         """
         Delete a group. Only the owner can delete a group.
-        
+
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group to delete.
             requesting_user_id: int - The user requesting the deletion.
-        
+
         Returns:
             bool - True if deletion was successful.
-        
+
         Raises:
             GroupNotFoundException - If the group doesn't exist.
             UnauthorizedActionException - If the user is not the owner.
@@ -328,15 +320,15 @@ class GroupService:
     async def leave_group(db: AsyncSession, group_id: int, user_id: int) -> bool:
         """
         User leaves a group. Owners cannot leave their own group.
-        
+
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group to leave.
             user_id: int - The user leaving the group.
-        
+
         Returns:
             bool - True if successful.
-        
+
         Raises:
             GroupMemberNotFoundException - If the user is not a member.
             UnauthorizedActionException - If the owner tries to leave.
@@ -350,7 +342,9 @@ class GroupService:
         )
         member = result.scalar_one_or_none()
         if not member:
-            raise GroupMemberNotFoundException(f"User {user_id} is not a member of group {group_id}.")
+            raise GroupMemberNotFoundException(
+                f"User {user_id} is not a member of group {group_id}."
+            )
 
         if member.role == GroupMemberRole.OWNER:
             raise UnauthorizedActionException(
@@ -364,33 +358,34 @@ class GroupService:
 
     @staticmethod
     async def remove_member(
-        db: AsyncSession,
-        group_id: int,
-        user_id_to_remove: int,
-        requesting_user_id: int
+        db: AsyncSession, group_id: int, user_id_to_remove: int, requesting_user_id: int
     ) -> bool:
         """
         Remove a member from a group. Only owners and admins can remove members.
         Owners cannot be removed. Admins can only be removed by owners.
-        
+
         Args:
             db: AsyncSession - The database session.
             group_id: int - The ID of the group.
             user_id_to_remove: int - The user ID to remove.
             requesting_user_id: int - The user requesting the removal.
-        
+
         Returns:
             bool - True if successful.
-        
+
         Raises:
             GroupMemberNotFoundException - If either user is not a member.
             UnauthorizedActionException - If the action is not authorized.
         """
-        logger.info(f"User {requesting_user_id} attempting to remove user {user_id_to_remove} from group {group_id}")
+        logger.info(
+            f"User {requesting_user_id} attempting to remove user {user_id_to_remove} from group {group_id}"
+        )
 
         requester_role = await GroupService.get_member_role(db, group_id, requesting_user_id)
         if not requester_role:
-            raise GroupMemberNotFoundException(f"User {requesting_user_id} is not a member of group {group_id}.")
+            raise GroupMemberNotFoundException(
+                f"User {requesting_user_id} is not a member of group {group_id}."
+            )
 
         if requester_role not in [GroupMemberRole.OWNER, GroupMemberRole.ADMIN]:
             raise UnauthorizedActionException("Only owners and admins can remove members.")
@@ -402,7 +397,9 @@ class GroupService:
         )
         target_member = result.scalar_one_or_none()
         if not target_member:
-            raise GroupMemberNotFoundException(f"User {user_id_to_remove} is not a member of group {group_id}.")
+            raise GroupMemberNotFoundException(
+                f"User {user_id_to_remove} is not a member of group {group_id}."
+            )
 
         if target_member.role == GroupMemberRole.OWNER:
             raise UnauthorizedActionException("Cannot remove the group owner.")
@@ -411,20 +408,24 @@ class GroupService:
             raise UnauthorizedActionException("Only the owner can remove admins.")
 
         if user_id_to_remove == requesting_user_id:
-            raise UnauthorizedActionException("You cannot remove yourself. Use the leave group option instead.")
+            raise UnauthorizedActionException(
+                "You cannot remove yourself. Use the leave group option instead."
+            )
 
         await db.delete(target_member)
         await db.commit()
-        logger.info(f"User {user_id_to_remove} removed from group {group_id} by user {requesting_user_id}")
+        logger.info(
+            f"User {user_id_to_remove} removed from group {group_id} by user {requesting_user_id}"
+        )
         return True
-    
+
     @staticmethod
     async def update_member_role(
         db: AsyncSession,
         group_id: int,
         target_user_id: int,
         new_role: GroupMemberRole,
-        requesting_user_id: int
+        requesting_user_id: int,
     ) -> dict:
         """
         Promote or demote a group member's role. Only the owner can do this.
@@ -484,10 +485,7 @@ class GroupService:
 
     @staticmethod
     async def _set_archive_state(
-        db: AsyncSession,
-        group_id: int,
-        requesting_user_id: int,
-        is_archived: bool
+        db: AsyncSession, group_id: int, requesting_user_id: int, is_archived: bool
     ) -> dict:
         """Set is_archived on a group. Only the owner may do this."""
         verb = "archive" if is_archived else "unarchive"
@@ -512,12 +510,16 @@ class GroupService:
     @staticmethod
     async def archive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
         """Archive a group. Only the owner can archive."""
-        return await GroupService._set_archive_state(db, group_id, requesting_user_id, is_archived=True)
+        return await GroupService._set_archive_state(
+            db, group_id, requesting_user_id, is_archived=True
+        )
 
     @staticmethod
     async def unarchive_group(db: AsyncSession, group_id: int, requesting_user_id: int) -> dict:
         """Restore an archived group. Only the owner can unarchive."""
-        return await GroupService._set_archive_state(db, group_id, requesting_user_id, is_archived=False)
+        return await GroupService._set_archive_state(
+            db, group_id, requesting_user_id, is_archived=False
+        )
 
     @staticmethod
     async def get_group_by_chat_id(db: AsyncSession, chat_id: int) -> List[dict]:
@@ -527,15 +529,13 @@ class GroupService:
         Args:
             db - AsyncSession - The database session.
             chat_id: int - The Telegram chat ID of the group.
-        
+
         Returns:
             List[dict] - A list of group data that is associated with the Telegram chat ID, empty if nothing is found.
         """
         logger.info(f"Getting group from Telegram chat ID: {chat_id}")
         result = await db.execute(
-            select(Group)
-            .where(Group.telegram_chat_id == chat_id)
-            .order_by(Group.created_at.desc())
+            select(Group).where(Group.telegram_chat_id == chat_id).order_by(Group.created_at.desc())
         )
         groups = result.scalars().all()
 
@@ -545,10 +545,7 @@ class GroupService:
 
     @staticmethod
     async def update_simplify_setting(
-        db: AsyncSession,
-        group_id: int,
-        simplify_debts: bool,
-        requesting_user_id: int
+        db: AsyncSession, group_id: int, simplify_debts: bool, requesting_user_id: int
     ) -> dict:
         """
         Update a group's default debt simplification setting.
@@ -566,7 +563,9 @@ class GroupService:
         Raises:
             GroupNotFoundException, UnauthorizedActionException.
         """
-        logger.info(f"Updating simplify_debts={simplify_debts} for group {group_id} by user {requesting_user_id}")
+        logger.info(
+            f"Updating simplify_debts={simplify_debts} for group {group_id} by user {requesting_user_id}"
+        )
 
         member_role = await GroupService.get_member_role(db, group_id, requesting_user_id)
         if member_role not in [GroupMemberRole.ADMIN, GroupMemberRole.OWNER]:

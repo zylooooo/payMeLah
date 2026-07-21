@@ -1,8 +1,20 @@
-from sqlalchemy import Column, Integer, String, Text, BigInteger, ForeignKey, DateTime, Enum, Boolean
-from sqlalchemy.orm import relationship
-from datetime import datetime, timezone, timedelta
-from infrastructure import Base
 import enum
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
+
+from infrastructure import Base
 
 
 class GroupMemberRole(str, enum.Enum):

@@ -1,25 +1,27 @@
+import logging
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
-from models import Expense, ExpenseParticipant, ExpenseSplitType, Group, Payment
+
+from models import Expense, ExpenseParticipant, ExpenseSplitType, Payment
 from shared import (
+    ExpenseNotEditableException,
     ExpenseNotFoundException,
     ExpenseValidationException,
-    ExpenseNotEditableException,
-    InvalidSplitException,
-    GroupNotFoundException,
     GroupMemberNotFoundException,
+    GroupNotFoundException,
+    InvalidSplitException,
     UnauthorizedActionException,
-    UserNotFoundException
+    UserNotFoundException,
 )
-from .group_service import GroupService
-from .user_service import UserService
-from .split_calculator import SplitCalculator
-from typing import Optional, List, Dict, Any
-from decimal import Decimal
-from datetime import timezone, datetime, date
-import logging
 
+from .group_service import GroupService
+from .split_calculator import SplitCalculator
+from .user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ class ExpenseService:
 
         if not await GroupService.is_member(db, expense_data['group_id'], expense_data['payer_id']):
             logger.warning(f"Payer {expense_data['payer_id']} is not a member of group {expense_data['group_id']}")
-            raise GroupMemberNotFoundException(f"Payer must be a member of the group.")
+            raise GroupMemberNotFoundException("Payer must be a member of the group.")
 
         for participant_id in expense_data['participant_ids']:
             if not await GroupService.is_member(db, expense_data['group_id'], participant_id):
@@ -115,7 +117,7 @@ class ExpenseService:
 
         logger.info(f"Expense {new_expense.id} created successfully in group {expense_data['group_id']}")
         return new_expense.to_dict()
-        
+
     @staticmethod
     def _calculate_shares(
         amount: Decimal,
@@ -131,7 +133,7 @@ class ExpenseService:
             split_type: ExpenseSplitType - The type of split to calculate for.
             participant_ids: List[int] - The IDs of the participants involved in the expense.
             split_data: Optional[Dict] - Additional split data for exact, percentage or custom splits.
-        
+
         Returns:
             List[Decimal] - List of share amounts for each participant, share the same index as the particpant IDs
         """
@@ -141,7 +143,7 @@ class ExpenseService:
             return SplitCalculator.calculate_equal_split(amount, count)
         elif split_type == ExpenseSplitType.EXACT:
             if not split_data or 'amounts' not in split_data:
-                logger.warning(f"Exact split validation failed: split_data missing or missing 'amounts' key")
+                logger.warning("Exact split validation failed: split_data missing or missing 'amounts' key")
                 raise ExpenseValidationException("Exact amounts are required for exact split type")
             if len(split_data['amounts']) != count:
                 logger.warning(
@@ -155,7 +157,7 @@ class ExpenseService:
             return SplitCalculator.calculate_exact_split(amount, split_data['amounts'])
         elif split_type == ExpenseSplitType.PERCENTAGE:
             if not split_data or 'percentages' not in split_data:
-                logger.warning(f"Percentage split validation failed: split_data missing or missing 'percentages' key")
+                logger.warning("Percentage split validation failed: split_data missing or missing 'percentages' key")
                 raise ExpenseValidationException("Split percentages are required for percentage split type.")
             if len(split_data['percentages']) != count:
                 logger.warning(
@@ -169,7 +171,7 @@ class ExpenseService:
             return SplitCalculator.calculate_percentage_split(amount, split_data['percentages'])
         elif split_type == ExpenseSplitType.CUSTOM:
             if not split_data or 'shares' not in split_data:
-                logger.warning(f"Custom split validation failed: split_data missing or missing 'shares' key")
+                logger.warning("Custom split validation failed: split_data missing or missing 'shares' key")
                 raise ExpenseValidationException("Share ratios are required for custom split type.")
             if len(split_data['shares']) != count:
                 logger.warning(
@@ -184,7 +186,7 @@ class ExpenseService:
         else:
             logger.error(f"Invalid split type provided: {split_type}")
             raise InvalidSplitException(f"Invalid split type {split_type} provided.")
-    
+
     @staticmethod
     async def get_expense_by_id(db: AsyncSession, expense_id: int) -> Optional[dict]:
         """
@@ -193,7 +195,7 @@ class ExpenseService:
         Args:
             db: AsyncSession - The database session.
             expense_id: int - The ID of the expense to get.
-        
+
         Returns:
             Optional[dict] - The expense data if found, None otherwise.
         """
@@ -206,10 +208,10 @@ class ExpenseService:
         if not expense:
             logger.warning(f"Expense with ID {expense_id} not found")
             raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found")
-        
+
         logger.info(f"Expense with ID {expense_id} found successfully")
         return expense.to_dict()
-    
+
     @staticmethod
     async def get_expenses_by_group_id(
         db: AsyncSession,
@@ -262,7 +264,7 @@ class ExpenseService:
 
         logger.info(f"Successfully found {len(expenses)} expenses for group {group_id}")
         return [expense.to_dict() for expense in expenses]
-    
+
     @staticmethod
     async def get_expense_count_by_group_id(
         db: AsyncSession,
@@ -308,7 +310,7 @@ class ExpenseService:
 
         logger.info(f"Found {count} expenses for group {group_id}")
         return count or 0
-    
+
     @staticmethod
     async def get_expenses_by_user_id(
         db: AsyncSession,
@@ -327,7 +329,7 @@ class ExpenseService:
             group_id: Optional[int] - The ID of the group to filter expenses by. If not provided, all expenses will be returned.
             limit: int - The maximum number of expenses to return (default = 10)
             offset: int - The number of expenses to skip (default = 0)
-        
+
         Returns:
             List[dict] - A list of expense dictionaries in descending order of expense date.
         """
@@ -337,7 +339,7 @@ class ExpenseService:
         user = await UserService.get_user_by_id(db, user_id)
         if not user:
             raise UserNotFoundException(f"User with ID {user_id} not found, unable to get expenses for this user.")
-        
+
         # Build the base query
         query = (
             select(Expense)
@@ -358,7 +360,7 @@ class ExpenseService:
                 logger.warning(f"User {user_id} is not a member of group {group_id}, they are unable to get expenses for this group.")
                 raise UnauthorizedActionException(f"User {user_id} is not a member of group {group_id}, they are unable to get expenses for this group.")
             query = query.where(Expense.group_id == group_id)
-        
+
         query = query.order_by(Expense.expense_date.desc(), Expense.created_at.desc())
         query = query.limit(limit).offset(offset)
 
@@ -367,7 +369,7 @@ class ExpenseService:
 
         logger.info(f"Successfully found {len(expenses)} expenses for user {user_id}")
         return [expense.to_dict() for expense in expenses]
-    
+
     @staticmethod
     async def get_expense_participants(
         db: AsyncSession,
@@ -384,7 +386,7 @@ class ExpenseService:
 
         Returns:
             List[dict] - A list of participant dictionaries with user details.
-        
+
         Raises:
             ExpenseNotFoundException - If the expense does not exist.
             UnauthorizedActionException - If the user is not a member of the group the expense belongs to.
@@ -400,7 +402,7 @@ class ExpenseService:
         if not expense:
             logger.warning(f"Expense with ID {expense_id} not found, unable to view participants for this expense.")
             raise ExpenseNotFoundException(f"Expense with ID {expense_id} not found, unable to view participants for this expense.")
-        
+
         # Optional authorization check if requesting user ID is provided
         if requesting_user_id is not None and not await GroupService.is_member(db, expense.group_id, requesting_user_id):
             logger.warning(f"User {requesting_user_id} is not a member of group {expense.group_id}, they are unable to view participants for this expense.")
@@ -426,11 +428,11 @@ class ExpenseService:
                 participants_with_details.append(participant_dict)
             else:
                 logger.warning(f"User with ID {participant.user_id} not found, unable to include user details for this expense participant. Skipping this participant...")
-                
-        
+
+
         logger.info(f"Successfully found {len(participants_with_details)} participants for expense {expense_id}")
         return participants_with_details
-    
+
     @staticmethod
     async def get_expense_with_participants(
         db: AsyncSession,
@@ -445,10 +447,10 @@ class ExpenseService:
             db: AsyncSession - The database session.
             expens_id: int - The expense ID.
             requesting_user_id: int - The user requesting the details, for authorization purposes
-        
+
         Returns:
             dict - Expense dictionary data with 'participants' key containing participant list.
-        
+
         Raises:
             ExpenseNotFoundException - If the expense doesn't exist.
             UnauthorizedActionException - If user is not a group member.
@@ -459,13 +461,13 @@ class ExpenseService:
 
         if not await GroupService.is_member(db, expense_dict['group_id'], requesting_user_id):
             raise UnauthorizedActionException(f"User {requesting_user_id} is not a member of group {expense_dict['group_id']}, they are unable to view this expense.")
-        
-        # Get participants 
+
+        # Get participants
         participants = await ExpenseService.get_expense_participants(db, expense_id)
 
         expense_dict['participants'] = participants
         return expense_dict
-    
+
     @staticmethod
     async def _assert_authorized(
         db: AsyncSession,
@@ -512,7 +514,7 @@ class ExpenseService:
                 and_(
                     ExpenseParticipant.expense_id == expense_id,
                     ExpenseParticipant.user_id != expense.payer_id,
-                    ExpenseParticipant.is_settled == True
+                    ExpenseParticipant.is_settled
                 )
             )
         )
@@ -684,7 +686,7 @@ class ExpenseService:
             .where(Expense.id == expense_id)
         )
         expense = result.scalar_one_or_none()
-        
+
         # Track what's changing for recalculation logic
         amount_changed = 'amount' in update_data and update_data['amount'] != expense.amount
         participants_changed = 'participant_ids' in update_data
@@ -696,21 +698,21 @@ class ExpenseService:
         new_split_type = update_data.get('split_type', expense.split_type)
         new_payer_id = update_data.get('payer_id', expense.payer_id)
         old_payer_id = expense.payer_id
-        
+
         # Validate payer is a group member if changing
         if 'payer_id' in update_data:
             if not await GroupService.is_member(db, expense.group_id, new_payer_id):
                 raise GroupMemberNotFoundException("Payer must be a member of the group.")
-        
+
         # Handle participant changes
         if participants_changed:
             new_participant_ids = update_data['participant_ids']
-            
+
             # Validate all new participants are group members
             for pid in new_participant_ids:
                 if not await GroupService.is_member(db, expense.group_id, pid):
                     raise GroupMemberNotFoundException(f"User {pid} is not a member of the group.")
-            
+
             # Delete existing participants
             await db.execute(
                 ExpenseParticipant.__table__.delete().where(
@@ -718,7 +720,7 @@ class ExpenseService:
                 )
             )
             await db.flush()
-            
+
             # Calculate new shares
             split_data = update_data.get('split_data')
             shares = ExpenseService._calculate_shares(
@@ -727,12 +729,12 @@ class ExpenseService:
                 participant_ids=new_participant_ids,
                 split_data=split_data
             )
-            
+
             # Get split percentages if applicable
             split_percentages = None
             if new_split_type == ExpenseSplitType.PERCENTAGE and split_data:
                 split_percentages = split_data.get('percentages')
-            
+
             # Create new participant records
             for i, participant_id in enumerate(new_participant_ids):
                 participant = ExpenseParticipant(
@@ -744,7 +746,7 @@ class ExpenseService:
                     settled_at=datetime.now(timezone.utc) if (participant_id == new_payer_id) else None
                 )
                 db.add(participant)
-        
+
         elif amount_changed or split_type_changed:
             # Recalculate shares for existing participants
             current_participant_ids = [p.user_id for p in expense.participants]
@@ -803,26 +805,26 @@ class ExpenseService:
             expense.payer_id = update_data['payer_id']
         if 'split_type' in update_data:
             expense.split_type = update_data['split_type']
-        
+
         # Update timestamp
         expense.updated_at = datetime.now(timezone.utc)
-        
+
         # Check if expense should be marked as settled
         # (all participants settled, which happens if only participant is payer)
         await db.flush()
-        
+
         # Re-fetch to get updated participants
         await db.refresh(expense)
         result = await db.execute(
             select(ExpenseParticipant).where(ExpenseParticipant.expense_id == expense_id)
         )
         updated_participants = result.scalars().all()
-        
+
         all_settled = all(p.is_settled for p in updated_participants)
         expense.is_settled = all_settled
-        
+
         await db.commit()
         await db.refresh(expense)
-        
+
         logger.info(f"Expense {expense_id} updated successfully by user {requesting_user_id}")
         return expense.to_dict()

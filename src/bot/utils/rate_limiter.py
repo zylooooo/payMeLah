@@ -4,10 +4,10 @@ Simple per-user in-memory rate limiter for Telegram command handlers.
 Limits each user to MAX_REQUESTS commands within WINDOW_SECONDS.
 State is process-local — sufficient for single-instance free-tier deployment.
 """
+import logging
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
-import logging
 
 logger = logging.getLogger(__name__)
 

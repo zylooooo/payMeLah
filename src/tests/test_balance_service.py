@@ -3,9 +3,9 @@ Unit tests for BalanceService._simplify_debts.
 Tests the core debt simplification algorithm with various scenarios.
 The algorithm should minimize the number of transactions to settle all debts.
 """
-import pytest
-from decimal import Decimal
 from collections import defaultdict
+from decimal import Decimal
+
 from services.balance_service import BalanceService
 
 

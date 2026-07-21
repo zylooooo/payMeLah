@@ -1,8 +1,22 @@
-from sqlalchemy import Column, Integer, String, Text, Numeric, BigInteger, ForeignKey, DateTime, Boolean, Enum, Date
-from sqlalchemy.orm import relationship
-from datetime import datetime, timezone, timedelta
-from infrastructure import Base
 import enum
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
+
+from infrastructure import Base
 
 
 class ExpenseSplitType(str, enum.Enum):

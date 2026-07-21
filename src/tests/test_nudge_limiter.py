@@ -1,6 +1,8 @@
 """Unit tests for the nudge cooldown limiter."""
-import pytest
 from datetime import datetime, timedelta, timezone
+
+import pytest
+
 import bot.utils.nudge_limiter as nl
 
 

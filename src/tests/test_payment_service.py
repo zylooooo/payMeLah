@@ -2,12 +2,13 @@
 Unit tests for PaymentService.record_payment and delete_payment.
 Tests validation rules and authorization without a real database.
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 from decimal import Decimal
-from services.payment_service import PaymentService
-from shared import UnauthorizedActionException, GroupMemberNotFoundException
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from services.payment_service import PaymentService
+from shared import GroupMemberNotFoundException, UnauthorizedActionException
 
 PAYER_ID = 1
 RECIPIENT_ID = 2

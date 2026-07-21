@@ -1,7 +1,9 @@
+from typing import List, Optional, Tuple
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from typing import Optional, Tuple, List
-from models import GroupMemberRole
+
 from config import BOT_NAME
+from models import GroupMemberRole
 
 
 class GroupKeyboard:
@@ -172,7 +174,7 @@ class GroupKeyboard:
         ])
 
         return InlineKeyboardMarkup(buttons)
-    
+
     @classmethod
     def get_confirm_keyboard(cls, action: str, group_id: int) -> InlineKeyboardMarkup:
         """Generate confirmation keyboard for destructive actions."""
@@ -205,7 +207,7 @@ class GroupKeyboard:
     def get_group_info_keyboard(cls, group_id: int, is_member: bool) -> InlineKeyboardMarkup:
         """Generate keyboard for group info view (used in group chat context)."""
         buttons = []
-        
+
         if not is_member:
             buttons.append([
                 InlineKeyboardButton(
@@ -213,12 +215,12 @@ class GroupKeyboard:
                     url=f"https://t.me/{BOT_NAME}?start=join_group_{group_id}"
                 )
             ])
-        
+
         # Back button
         buttons.append([
             InlineKeyboardButton("<< Back to List", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_LIST))
         ])
-        
+
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
@@ -258,14 +260,14 @@ class GroupKeyboard:
         buttons.append(bottom_row)
 
         return InlineKeyboardMarkup(buttons)
-    
+
     @classmethod
     def _build_callback_data(cls, action: str, data: Optional[str] = None) -> str:
         """Build callback data string."""
         if data:
             return f"{cls.PREFIX}{action}:{data}"
         return f"{cls.PREFIX}{action}"
-    
+
     @classmethod
     def extract_callback_info(cls, callback_data: str) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -276,7 +278,7 @@ class GroupKeyboard:
         """
         if not callback_data or not callback_data.startswith(cls.PREFIX):
             return None, None
-        
+
         data_str = callback_data[len(cls.PREFIX):]
 
         if ':' in data_str:
@@ -284,7 +286,7 @@ class GroupKeyboard:
             return action, data
         else:
             return data_str, None
-    
+
     @classmethod
     def matches_prefix(cls, callback_data: str) -> bool:
         """Check if callback data matches this keyboard's prefix."""
@@ -376,35 +378,35 @@ class GroupKeyboard:
         Shows removable members based on requester's role.
         """
         buttons = []
-        
+
         # Sort by role (owner first, then admin, then member)
         role_order = {'owner': 0, 'admin': 1, 'member': 2}
         sorted_members = sorted(members, key=lambda m: role_order.get(m.get('role', 'member'), 2))
-        
+
         for member in sorted_members:
             member_role = member.get('role', 'member')
             user_id = member.get('user_id')
-            
+
             # Skip owner (cannot be removed)
             if member_role == 'owner':
                 continue
-            
+
             # Admins can only remove members, not other admins
             if requesting_user_role == GroupMemberRole.ADMIN and member_role == 'admin':
                 continue
-            
+
             # Get display name with role indicator
             display_name = member.get('first_name') or member.get('username') or f"User {user_id}"
             role_label = f"[{member_role.title()}]" if member_role == 'admin' else ""
             button_text = f"{display_name} {role_label}".strip()
-            
+
             buttons.append([
                 InlineKeyboardButton(
                     button_text,
                     callback_data=cls._build_callback_data(cls.ACTION_CONFIRM, f"remove:{group_id}:{user_id}")
                 )
             ])
-        
+
         # Back button
         buttons.append([
             InlineKeyboardButton(

@@ -1,8 +1,10 @@
 """
 Tests for ExpenseService category filter parameters.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from services.expense_service import ExpenseService
 
 

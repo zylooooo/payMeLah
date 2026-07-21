@@ -1,17 +1,16 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
-from models import Expense, ExpenseParticipant, Payment, Group
-from shared import (
-    GroupNotFoundException,
-    UnauthorizedActionException
-)
-from .group_service import GroupService
-from .currency_service import CurrencyService
-from typing import Dict, List, Tuple
-from decimal import Decimal
-from collections import defaultdict
 import logging
+from collections import defaultdict
+from decimal import Decimal
+from typing import Dict, List, Tuple
 
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models import Expense, ExpenseParticipant, Payment
+from shared import GroupNotFoundException, UnauthorizedActionException
+
+from .currency_service import CurrencyService
+from .group_service import GroupService
 
 logger = logging.getLogger(__name__)
 

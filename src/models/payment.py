@@ -1,9 +1,10 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, BigInteger, ForeignKey, DateTime
+from datetime import datetime, timezone
+
+from sqlalchemy import BigInteger, Column, Date, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone, timedelta
-from infrastructure import Base
 
+from infrastructure import Base
 
 
 class Payment(Base):

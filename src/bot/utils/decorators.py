@@ -1,7 +1,9 @@
+import logging
 from functools import wraps
+
 from telegram import Update
 from telegram.ext import ContextTypes
-import logging
+
 from bot.keyboards import ChatRedirectKeyboard
 
 logger = logging.getLogger(__name__)
@@ -14,18 +16,18 @@ def validate_chat_type(*allowed_chat_types: str):
             if not update.effective_chat:
                 logger.warning("Received update without effective_chat")
                 return
-            
+
             chat_type = update.effective_chat.type
-            
+
             # Get command name for logging (safely)
             command = "unknown"
             if update.message and update.message.text:
                 command = update.message.text.split()[0]
             elif update.callback_query:
                 command = "callback_query"
-            
+
             logger.debug(f"Command {command} received in chat type: {chat_type}, allowed: {allowed_chat_types}")
-            
+
             if chat_type not in allowed_chat_types:
                 logger.warning(f"User tried to access {command} in an invalid chat type: {chat_type}. Allowed: {allowed_chat_types}")
 
@@ -45,7 +47,7 @@ def validate_chat_type(*allowed_chat_types: str):
                             f"Please use this command in {', '.join(allowed_chat_types)} chats where I am added to!"
                         )
                 return
-            
+
             return await func(update, context)
         return wrapper
     return decorator

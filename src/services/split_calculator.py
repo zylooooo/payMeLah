@@ -1,7 +1,8 @@
-from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Dict
-from shared import InvalidSplitException
 import logging
+from decimal import ROUND_HALF_UP, Decimal
+from typing import List
+
+from shared import InvalidSplitException
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,14 @@ class SplitCalculator:
         Args:
             total: Decimal - Total expense amount.
             participant_count: int - Number of participants.
-        
+
         Returns:
             List[Decimal] - List of share amounts for each participant.
         """
         if participant_count <= 0:
             logger.warning(f"Invalid participant count: {participant_count}. Must be greater than 0.")
             raise InvalidSplitException("There must be at least one participant to split the expense.")
-        
+
         total = Decimal(str(total))
         base_share = (total / participant_count).quantize(
             SplitCalculator.PRECISION, rounding=ROUND_HALF_UP
@@ -48,9 +49,9 @@ class SplitCalculator:
                 adjustment = SplitCalculator.PRECISION if remainder_cents > 0 else -SplitCalculator.PRECISION
                 share += adjustment
             shares.append(share)
-        
+
         return shares
-    
+
     @staticmethod
     def calculate_exact_split(total: Decimal, amounts: List[Decimal]) -> List[Decimal]:
         """
@@ -59,7 +60,7 @@ class SplitCalculator:
         Args:
             total: Decimal - Total expense amount.
             amounts: List[Decimal] - List of exact split amounts given by the user.
-        
+
         Returns:
             List[Decimal] - List of share amounts for each participant.
         """
@@ -76,9 +77,9 @@ class SplitCalculator:
             raise InvalidSplitException(
                 f"Split amounts {amounts_sum} do not match the total amount {total}"
             )
-        
+
         return amounts
-    
+
     @staticmethod
     def calculate_percentage_split(total: Decimal, percentages: List[Decimal]) -> List[Decimal]:
         """
@@ -88,7 +89,7 @@ class SplitCalculator:
         Args:
             total: Decimal - Total expense amount.
             percentages: List[Decimal] - List of percentages for each participant.
-        
+
         Returns:
             List[Decimal] - List of share amounts for each participant.
         """
@@ -104,19 +105,19 @@ class SplitCalculator:
             raise InvalidSplitException(
                 f"Percentages must sum up to 100% but got {percentages_sum}"
             )
-        
+
         shares = []
         for percentage in percentages:
             share = (total * percentage / Decimal('100')).quantize(
                 SplitCalculator.PRECISION, rounding=ROUND_HALF_UP
             )
             shares.append(share)
-        
+
         # Adjust for rounding errors
         diff = total - sum(shares)
         if diff != 0 and shares:
             shares[0] += diff
-        
+
         return shares
 
     @staticmethod
@@ -129,7 +130,7 @@ class SplitCalculator:
         Args:
             total: Decimal - Total expense amount.
             shares: List of share ratios (integers)
-        
+
         Returns:
             List[Decimal] - List of share amounts for each participant.
         """
@@ -139,17 +140,17 @@ class SplitCalculator:
         if total_shares <= 0:
             logger.warning(f"Invalid custom split: total share ratios ({total_shares}) must be greater than 0")
             raise InvalidSplitException("Total share ratios must be greater than 0")
-        
+
         amounts = []
         for share in shares:
             amount = (total * Decimal(share) / Decimal(total_shares)).quantize(
                 SplitCalculator.PRECISION, rounding=ROUND_HALF_UP
             )
             amounts.append(amount)
-        
+
         # Adjust for rounding
         diff = total - sum(amounts)
         if diff != 0 and amounts:
             amounts[0] += diff
-        
+
         return amounts

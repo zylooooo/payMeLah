@@ -1,5 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 from config import BOT_NAME
+
 
 class ChatRedirectKeyboard:
     @classmethod

@@ -2,11 +2,13 @@
 Unit tests for CurrencyService.
 All HTTP calls are mocked — no real network requests are made.
 """
-import pytest
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone, timedelta
-from services.currency_service import CurrencyService, _rate_cache, _CACHE_TTL
+
+import pytest
+
+from services.currency_service import _CACHE_TTL, CurrencyService, _rate_cache
 
 
 def _mock_http_response(rates: dict) -> MagicMock:

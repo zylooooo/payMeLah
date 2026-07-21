@@ -1,7 +1,13 @@
-from .user import User
+from .expense import (
+    CATEGORY_DISPLAY,
+    Expense,
+    ExpenseCategory,
+    ExpenseParticipant,
+    ExpenseSplitType,
+)
 from .group import Group, GroupMember, GroupMemberRole
-from .expense import Expense, ExpenseParticipant, ExpenseSplitType, ExpenseCategory, CATEGORY_DISPLAY
 from .payment import Payment
+from .user import User
 
 __all__ = [
     "User",

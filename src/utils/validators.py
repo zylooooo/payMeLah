@@ -1,7 +1,8 @@
-import pycountry
 import logging
-from typing import Tuple, Optional, List
 from decimal import Decimal, InvalidOperation
+from typing import Optional, Tuple
+
+import pycountry
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +21,18 @@ def validate_name(name: str) -> Tuple[bool, Optional[str]]:
 
     Args:
         name: str - The name to validate
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
     if not name or not name.strip():
         return False, "Name cannot be empty. Please enter a valid name or use 'Skip'."
-    
+
     name = name.strip()
 
     if len(name) > MAX_NAME_LENGTH:
         return False, f"Name is too long. Maximum length is {MAX_NAME_LENGTH} characters."
-    
+
     return True, None
 
 
@@ -41,18 +42,18 @@ def validate_currency_code(currency_code: str) -> Tuple[bool, Optional[str]]:
 
     Args:
         currency_code: str - The currency code input by the user
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
     if not currency_code or not currency_code.strip():
         return False, "Currency code cannot be empty. Please enter a valid currency code or use 'Skip'."
-    
+
     currency_code = currency_code.strip().upper()
 
     if len(currency_code) != CURRENCY_CODE_LENGTH:
         return False, f"Currency code must be {CURRENCY_CODE_LENGTH} characters long. Please enter a valid currency code eg. (SGD, MYR, USD) etc."
-    
+
     try:
         currency = pycountry.currencies.get(alpha_3=currency_code)
         if currency is None:
@@ -72,18 +73,18 @@ def validate_group_name(name: str) -> Tuple[bool, Optional[str]]:
 
     Args:
         name: str - The group name to validate
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
     if not name or not name.strip():
         return False, "Group name cannot be empty. Please enter a valid group name between 1 and 255 characters."
-    
+
     name = name.strip()
 
     if len(name) > MAX_GROUP_NAME_LENGTH:
         return False, f"Group name must be between 1 and {MAX_GROUP_NAME_LENGTH} characters. Please enter a valid group name."
-    
+
     return True, None
 
 def validate_expense_amount(amount_str: str) -> Tuple[bool, Optional[str], Optional[Decimal]]:
@@ -98,7 +99,7 @@ def validate_expense_amount(amount_str: str) -> Tuple[bool, Optional[str], Optio
     """
     if not amount_str or not amount_str.strip():
         return False, "Amount cannot be empty.", None
-    
+
     # Remove currency symbols and whitespace
     cleaned = amount_str.strip().replace('$', '').replace(',', '')
 
@@ -109,13 +110,13 @@ def validate_expense_amount(amount_str: str) -> Tuple[bool, Optional[str], Optio
             return False, f"Amount cannot be less than {MIN_EXPENSE_AMOUNT}", None
         if amount > MAX_EXPENSE_AMOUNT:
             return False, f"Amount cannot be greater than {MAX_EXPENSE_AMOUNT}", None
-        
+
         return True, None, amount
     except InvalidOperation:
         return False, "Invalid amount. Please enter a valid number (e.g., 25.50)", None
-    
+
 def validate_exact_split_amount(
-    amount_str: str, 
+    amount_str: str,
     total_amount: Decimal,
     already_allocated: Decimal = Decimal('0')
 ) -> Tuple[bool, Optional[str], Optional[Decimal]]:
@@ -126,25 +127,25 @@ def validate_exact_split_amount(
         amount_str: str - The amount input by the user
         total_amount: Decimal - The total expense amount
         already_allocated: Decimal - Sum of amounts already allocated to other participants
-    
+
     Returns:
         Tuple of (is_valid, error_message, validated_amount)
     """
     # First, perform basic amount validation
     is_valid, error_msg, validated_amount = validate_expense_amount(amount_str)
-    
+
     if not is_valid:
         return False, error_msg, None
-    
+
     # Check if the individual amount exceeds the total expense
     if validated_amount > total_amount:
         return False, f"Amount cannot exceed the total expense of {total_amount}", None
-    
+
     # Check if the amount exceeds the remaining unallocated amount
     remaining = total_amount - already_allocated
     if validated_amount > remaining:
         return False, f"Amount cannot exceed the remaining amount of {remaining}", None
-    
+
     return True, None, validated_amount
 
 def validate_expense_description(description: str) -> Tuple[bool, Optional[str]]:
@@ -160,10 +161,10 @@ def validate_expense_description(description: str) -> Tuple[bool, Optional[str]]
 
     description = description.strip()
 
-    # Date type is set to be TEXT in the database, but just set a soft cap to reduce data size 
+    # Date type is set to be TEXT in the database, but just set a soft cap to reduce data size
     if len(description) > MAX_DESCRIPTION_LENGTH:
         return False, f"Description cannot be longer than {MAX_DESCRIPTION_LENGTH} characters."
-    
+
     return True, None
 
 def validate_percentage_split(
@@ -176,30 +177,30 @@ def validate_percentage_split(
     Args:
         percentage_str: str - The percentage input by the user
         already_allocated: Decimal - Sum of percentages already allocated
-    
+
     Returns:
         Tuple of (is_valid, error_message, validated_percentage)
     """
     if not percentage_str or not percentage_str.strip():
         return False, "Percentage cannot be empty.", None
-    
+
     # Remove % symbol if present
     cleaned = percentage_str.strip().replace('%', '').strip()
-    
+
     try:
         percentage = Decimal(cleaned).quantize(Decimal('0.01'))
-        
+
         if percentage <= Decimal('0'):
             return False, "Percentage must be greater than 0.", None
-        
+
         if percentage > Decimal('100'):
             return False, "Percentage cannot exceed 100%.", None
-        
+
         # Check if this would exceed 100% total
         remaining = Decimal('100') - already_allocated
         if percentage > remaining:
             return False, f"Percentage cannot exceed remaining {remaining}%.", None
-        
+
         return True, None, percentage
     except InvalidOperation:
         return False, "Invalid percentage. Please enter a valid number (e.g., 25 or 33.33).", None
@@ -213,24 +214,24 @@ def validate_custom_share(
 
     Args:
         share_str: str - The share ratio input by the user (e.g., "2" for 2 shares)
-    
+
     Returns:
         Tuple of (is_valid, error_message, validated_share)
     """
     if not share_str or not share_str.strip():
         return False, "Share cannot be empty.", None
-    
+
     cleaned = share_str.strip()
-    
+
     try:
         share = int(cleaned)
-        
+
         if share <= 0:
             return False, "Share must be a positive whole number (1, 2, 3, etc.).", None
-        
+
         if share > 100:
             return False, "Share cannot exceed 100.", None
-        
+
         return True, None, share
     except ValueError:
         return False, "Invalid share. Please enter a whole number (e.g., 1, 2, 3).", None

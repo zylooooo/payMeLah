@@ -1,34 +1,37 @@
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+import logging
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
+    CallbackQueryHandler,
     ContextTypes,
     ConversationHandler,
-    CallbackQueryHandler,
     MessageHandler,
-    filters
+    filters,
 )
-from decimal import Decimal
-from typing import Optional, Dict, Any, List
+
 from bot.keyboards import ExpenseKeyboard
-from .states import EditExpenseStates
-from utils import (
-    validate_expense_amount,
-    validate_expense_description,
-    validate_currency_code,
-    validate_exact_split_amount,
-    validate_percentage_split,
-    validate_custom_share
-)
-from services import ExpenseService, GroupService, SplitCalculator
+from bot.utils import get_display_name, h
 from infrastructure import get_db
-from models import ExpenseSplitType, ExpenseCategory, CATEGORY_DISPLAY
+from models import CATEGORY_DISPLAY, ExpenseCategory, ExpenseSplitType
+from services import ExpenseService, GroupService, SplitCalculator
 from shared import (
+    ExpenseNotEditableException,
     ExpenseNotFoundException,
     UnauthorizedActionException,
-    ExpenseNotEditableException
 )
-from datetime import datetime, timezone, date
-import logging
+from utils import (
+    validate_currency_code,
+    validate_custom_share,
+    validate_exact_split_amount,
+    validate_expense_amount,
+    validate_expense_description,
+    validate_percentage_split,
+)
 
+from .states import EditExpenseStates
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +39,14 @@ ERROR_MSG = "An unexpected error has occurred while editing the expense. Please 
 CONVERSATION_TIMEOUT = 600  # 10 minutes
 
 FIELD_LABELS = {
-    'description': 'Description',
-    'amount': 'Amount',
-    'currency': 'Currency',
-    'expense_date': 'Date',
-    'payer_id': 'Payer',
-    'participant_ids': 'Participants',
-    'split_type': 'Split type',
-    'category': 'Category',
+    "description": "Description",
+    "amount": "Amount",
+    "currency": "Currency",
+    "expense_date": "Date",
+    "payer_id": "Payer",
+    "participant_ids": "Participants",
+    "split_type": "Split type",
+    "category": "Category",
 }
 
 
@@ -66,16 +69,16 @@ def _format_category_label(v) -> str:
 def _cleanup_conversation(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cleanup conversation state."""
     keys_to_remove = [
-        'edit_expense_id',
-        'edit_original_data',
-        'edit_changes',
-        'edit_group_members',
-        'edit_selected_participants',
-        'edit_exact_amounts_pending',
-        'edit_percentages_pending',
-        'edit_custom_shares_pending',
-        'edit_conversation_active',
-        'edit_last_message_id'
+        "edit_expense_id",
+        "edit_original_data",
+        "edit_changes",
+        "edit_group_members",
+        "edit_selected_participants",
+        "edit_exact_amounts_pending",
+        "edit_percentages_pending",
+        "edit_custom_shares_pending",
+        "edit_conversation_active",
+        "edit_last_message_id",
     ]
     for key in keys_to_remove:
         context.user_data.pop(key, None)
@@ -83,57 +86,45 @@ def _cleanup_conversation(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _cleanup_previous_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean up inline keyboard from previous bot message."""
-    message_id = context.user_data.get('edit_last_message_id')
+    message_id = context.user_data.get("edit_last_message_id")
     if not message_id:
         return
-    
+
     chat_id = update.effective_chat.id
     try:
         await context.bot.edit_message_reply_markup(
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=None
+            chat_id=chat_id, message_id=message_id, reply_markup=None
         )
     except Exception as e:
         logger.debug(f"Failed to remove keyboard for message {message_id}: {e}")
     finally:
-        context.user_data.pop('edit_last_message_id', None)
+        context.user_data.pop("edit_last_message_id", None)
 
 
 async def _send_or_edit_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    text: str,
-    keyboard=None
+    update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, keyboard=None
 ) -> None:
     """Unified message handler for both callback queries and text messages."""
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=keyboard
+            text, parse_mode="HTML", reply_markup=keyboard
         )
-        context.user_data['edit_last_message_id'] = update.callback_query.message.message_id
+        context.user_data["edit_last_message_id"] = update.callback_query.message.message_id
     else:
         await _cleanup_previous_keyboard(update, context)
         sent_message = await update.message.reply_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=keyboard
+            text, parse_mode="HTML", reply_markup=keyboard
         )
-        context.user_data['edit_last_message_id'] = sent_message.message_id
+        context.user_data["edit_last_message_id"] = sent_message.message_id
 
 
 async def _send_validation_error(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    error_msg: str,
-    keyboard=None
+    update: Update, context: ContextTypes.DEFAULT_TYPE, error_msg: str, keyboard=None
 ) -> None:
     """Send validation error message."""
-    message_id = context.user_data.get('edit_last_message_id')
+    message_id = context.user_data.get("edit_last_message_id")
     chat_id = update.effective_chat.id
-    
+
     if message_id:
         try:
             await context.bot.edit_message_text(
@@ -141,36 +132,29 @@ async def _send_validation_error(
                 message_id=message_id,
                 text=error_msg,
                 parse_mode="HTML",
-                reply_markup=keyboard
+                reply_markup=keyboard,
             )
             return
         except Exception as e:
             logger.debug(f"Failed to edit message for validation error: {e}")
-    
+
     await _cleanup_previous_keyboard(update, context)
     sent_message = await update.message.reply_text(
-        error_msg,
-        parse_mode="HTML",
-        reply_markup=keyboard
+        error_msg, parse_mode="HTML", reply_markup=keyboard
     )
-    context.user_data['edit_last_message_id'] = sent_message.message_id
-
-
-def _get_member_display_name(member: dict) -> str:
-    """Get display name for a member."""
-    return member.get('first_name') or member.get('username') or f"User {member.get('user_id')}"
+    context.user_data["edit_last_message_id"] = sent_message.message_id
 
 
 def _get_effective_value(context: ContextTypes.DEFAULT_TYPE, field: str) -> Any:
     """Get the effective value for a field (changed value or original)."""
-    changes = context.user_data.get('edit_changes', {})
-    original = context.user_data.get('edit_original_data', {})
+    changes = context.user_data.get("edit_changes", {})
+    original = context.user_data.get("edit_original_data", {})
     return changes.get(field, original.get(field))
 
 
 def _has_changes(context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Check if there are any pending changes."""
-    return bool(context.user_data.get('edit_changes', {}))
+    return bool(context.user_data.get("edit_changes", {}))
 
 
 # ===================================================================================
@@ -183,59 +167,59 @@ async def start_edit_expense(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """
     query = update.callback_query
     await query.answer()
-    
+
     telegram_user = update.effective_user
     if not telegram_user:
         logger.warning("Edit expense started without telegram user information")
         return ConversationHandler.END
-    
+
     # Extract expense_id from callback data
     action, data = ExpenseKeyboard.extract_callback_info(query.data)
     if not data:
         await query.edit_message_text("Invalid expense selection.")
         return ConversationHandler.END
-    
+
     try:
         expense_id = int(data)
     except ValueError:
         await query.edit_message_text("Invalid expense ID.")
         return ConversationHandler.END
-    
+
     logger.info(f"User {telegram_user.id} starting edit for expense {expense_id}")
-    
+
     try:
         async with get_db() as db:
             # Check authorization
             can_modify, reason = await ExpenseService.can_modify_expense(
                 db, expense_id, telegram_user.id
             )
-            
+
             if not can_modify:
                 await query.edit_message_text(reason)
                 return ConversationHandler.END
-            
+
             # Get expense data with participants
             expense_data = await ExpenseService.get_expense_with_participants(
                 db, expense_id, telegram_user.id
             )
-            
+
             # Get group members for payer/participant selection
             group_members = await GroupService.get_group_members_with_details(
-                db, expense_data['group_id']
+                db, expense_data["group_id"]
             )
-        
+
         # Initialize conversation state
-        context.user_data['edit_conversation_active'] = True
-        context.user_data['edit_expense_id'] = expense_id
-        context.user_data['edit_original_data'] = expense_data
-        context.user_data['edit_changes'] = {}
-        context.user_data['edit_group_members'] = group_members
-        context.user_data['edit_selected_participants'] = [
-            p['user_id'] for p in expense_data.get('participants', [])
+        context.user_data["edit_conversation_active"] = True
+        context.user_data["edit_expense_id"] = expense_id
+        context.user_data["edit_original_data"] = expense_data
+        context.user_data["edit_changes"] = {}
+        context.user_data["edit_group_members"] = group_members
+        context.user_data["edit_selected_participants"] = [
+            p["user_id"] for p in expense_data.get("participants", [])
         ]
-        
+
         return await _show_edit_menu(update, context)
-    
+
     except ExpenseNotFoundException:
         await query.edit_message_text("Expense not found. It may have been deleted.")
         return ConversationHandler.END
@@ -253,14 +237,14 @@ async def start_edit_expense(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ===================================================================================
 async def _show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Show the edit menu with all editable fields."""
-    original = context.user_data.get('edit_original_data', {})
-    changes = context.user_data.get('edit_changes', {})
-    
+    original = context.user_data.get("edit_original_data", {})
+    changes = context.user_data.get("edit_changes", {})
+
     # Get effective values
-    description = changes.get('description', original.get('description')) or 'No description'
-    amount = changes.get('amount', original.get('amount', 0))
-    currency = changes.get('currency', original.get('currency', 'SGD'))
-    category_val = changes.get('category', original.get('category'))
+    description = h(changes.get("description", original.get("description"))) or "No description"
+    amount = changes.get("amount", original.get("amount", 0))
+    currency = changes.get("currency", original.get("currency", "SGD"))
+    category_val = changes.get("category", original.get("category"))
     category_display = ""
     if category_val:
         category_display = f"\n<b>Category:</b> {_format_category_label(category_val)}"
@@ -273,46 +257,51 @@ async def _show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"{category_display}\n\n"
         "Select a field to edit:"
     )
-    
+
     # Show pending changes if any
     if changes:
-        members = context.user_data.get('edit_group_members', [])
+        members = context.user_data.get("edit_group_members", [])
         change_lines = []
         for field, new_value in changes.items():
-            if field == 'split_data':
+            if field == "split_data":
                 continue
             old_value = original.get(field)
             label = FIELD_LABELS.get(field, field)
 
-            if field == 'split_type':
-                new_value = new_value.value if hasattr(new_value, 'value') else new_value
-                old_value = old_value.value if hasattr(old_value, 'value') else old_value
-            elif field == 'payer_id':
-                old_m = next((m for m in members if m.get('user_id') == old_value), {})
-                new_m = next((m for m in members if m.get('user_id') == new_value), {})
-                old_value = _get_member_display_name(old_m) if old_m else old_value
-                new_value = _get_member_display_name(new_m) if new_m else new_value
-            elif field == 'participant_ids':
+            if field == "split_type":
+                new_value = new_value.value if hasattr(new_value, "value") else new_value
+                old_value = old_value.value if hasattr(old_value, "value") else old_value
+            elif field == "payer_id":
+                old_m = next((m for m in members if m.get("user_id") == old_value), {})
+                new_m = next((m for m in members if m.get("user_id") == new_value), {})
+                old_value = get_display_name(old_m) if old_m else old_value
+                new_value = get_display_name(new_m) if new_m else new_value
+            elif field == "participant_ids":
                 old_names = [
-                    _get_member_display_name(next((m for m in members if m.get('user_id') == p['user_id']), {}))
-                    for p in original.get('participants', [])
+                    get_display_name(
+                        next((m for m in members if m.get("user_id") == p["user_id"]), {})
+                    )
+                    for p in original.get("participants", [])
                 ]
                 new_names = [
-                    _get_member_display_name(next((m for m in members if m.get('user_id') == pid), {}))
+                    get_display_name(next((m for m in members if m.get("user_id") == pid), {}))
                     for pid in new_value
                 ]
                 old_value = ", ".join(old_names) or "—"
                 new_value = ", ".join(new_names) or "—"
-            elif field == 'expense_date' and hasattr(new_value, 'isoformat'):
+            elif field == "expense_date" and hasattr(new_value, "isoformat"):
                 new_value = new_value.isoformat()
-            elif field == 'category':
+            elif field == "category":
                 old_value = _format_category_label(old_value)
                 new_value = _format_category_label(new_value)
+            elif field == "description":
+                old_value = h(old_value)
+                new_value = h(new_value)
 
             change_lines.append(f"  {label}: {old_value} → {new_value}")
 
         message += "\n\n<b>Pending changes:</b>\n" + "\n".join(change_lines)
-    
+
     keyboard = ExpenseKeyboard.get_edit_menu_keyboard(has_changes=_has_changes(context))
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.SELECT_FIELD
@@ -322,15 +311,15 @@ async def handle_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Handle edit menu selections."""
     query = update.callback_query
     await query.answer()
-    
+
     action, data = ExpenseKeyboard.extract_callback_info(query.data)
-    
+
     if action == ExpenseKeyboard.ACTION_CANCEL:
         return await cancel_edit(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_SAVE:
         return await _show_edit_summary(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_EDIT_FIELD:
         if data == ExpenseKeyboard.FIELD_DESCRIPTION:
             return await _prompt_edit_description(update, context)
@@ -357,16 +346,15 @@ async def handle_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # ===================================================================================
 async def _prompt_edit_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for new description."""
-    current = _get_effective_value(context, 'description') or 'No description'
-    
+    current = h(_get_effective_value(context, "description")) or "No description"
+
     message = (
         "<b>Edit Description</b>\n\n"
         f"Current: {current}\n\n"
         "Enter new description (or Skip to clear):"
     )
     keyboard = ExpenseKeyboard.get_edit_field_keyboard(
-        ExpenseKeyboard.FIELD_DESCRIPTION,
-        show_skip=True
+        ExpenseKeyboard.FIELD_DESCRIPTION, show_skip=True
     )
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.EDIT_DESCRIPTION
@@ -378,27 +366,31 @@ async def handle_edit_description(update: Update, context: ContextTypes.DEFAULT_
         query = update.callback_query
         await query.answer()
         action, data = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
             return await _show_edit_menu(update, context)
         if action == ExpenseKeyboard.ACTION_SKIP:
-            context.user_data['edit_changes']['description'] = None
+            context.user_data["edit_changes"]["description"] = None
             return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.EDIT_DESCRIPTION
-    
+
     # Handle text input
     is_valid, error_msg = validate_expense_description(update.message.text)
     if not is_valid:
         await _send_validation_error(
-            update, context, error_msg,
-            ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_DESCRIPTION, show_skip=True)
+            update,
+            context,
+            error_msg,
+            ExpenseKeyboard.get_edit_field_keyboard(
+                ExpenseKeyboard.FIELD_DESCRIPTION, show_skip=True
+            ),
         )
         return EditExpenseStates.EDIT_DESCRIPTION
-    
-    context.user_data['edit_changes']['description'] = update.message.text.strip()
+
+    context.user_data["edit_changes"]["description"] = update.message.text.strip()
     return await _show_edit_menu(update, context)
 
 
@@ -407,14 +399,10 @@ async def handle_edit_description(update: Update, context: ContextTypes.DEFAULT_
 # ===================================================================================
 async def _prompt_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for new amount."""
-    current = _get_effective_value(context, 'amount')
-    currency = _get_effective_value(context, 'currency')
-    
-    message = (
-        "<b>Edit Amount</b>\n\n"
-        f"Current: {currency} {current}\n\n"
-        "Enter new amount:"
-    )
+    current = _get_effective_value(context, "amount")
+    currency = _get_effective_value(context, "currency")
+
+    message = f"<b>Edit Amount</b>\n\nCurrent: {currency} {current}\n\nEnter new amount:"
     keyboard = ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_AMOUNT)
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.EDIT_AMOUNT
@@ -426,38 +414,37 @@ async def handle_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
         query = update.callback_query
         await query.answer()
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
             return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.EDIT_AMOUNT
-    
+
     # Handle text input
     is_valid, error_msg, amount = validate_expense_amount(update.message.text)
     if not is_valid:
         await _send_validation_error(
-            update, context, error_msg,
-            ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_AMOUNT)
+            update,
+            context,
+            error_msg,
+            ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_AMOUNT),
         )
         return EditExpenseStates.EDIT_AMOUNT
-    
-    context.user_data['edit_changes']['amount'] = amount
-    
+
+    context.user_data["edit_changes"]["amount"] = amount
+
     # Check if we need to re-enter split data for EXACT split type
-    split_type = _get_effective_value(context, 'split_type')
+    split_type = _get_effective_value(context, "split_type")
     if isinstance(split_type, str):
         split_type = ExpenseSplitType(split_type)
-    
+
     if split_type == ExpenseSplitType.EXACT:
         # Need to re-enter exact amounts since total changed
-        context.user_data['edit_exact_amounts_pending'] = {
-            'amounts': {},
-            'current_index': 0
-        }
+        context.user_data["edit_exact_amounts_pending"] = {"amounts": {}, "current_index": 0}
         return await _prompt_exact_amounts(update, context)
-    
+
     return await _show_edit_menu(update, context)
 
 
@@ -466,8 +453,8 @@ async def handle_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ===================================================================================
 async def _prompt_edit_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for new currency."""
-    current = _get_effective_value(context, 'currency')
-    
+    current = _get_effective_value(context, "currency")
+
     message = (
         "<b>Edit Currency</b>\n\n"
         f"Current: {current}\n\n"
@@ -484,25 +471,27 @@ async def handle_edit_currency(update: Update, context: ContextTypes.DEFAULT_TYP
         query = update.callback_query
         await query.answer()
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
             return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.EDIT_CURRENCY
-    
+
     # Handle text input
     currency_code = update.message.text.strip().upper()
     is_valid, error_msg = validate_currency_code(currency_code)
     if not is_valid:
         await _send_validation_error(
-            update, context, error_msg,
-            ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_CURRENCY)
+            update,
+            context,
+            error_msg,
+            ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_CURRENCY),
         )
         return EditExpenseStates.EDIT_CURRENCY
-    
-    context.user_data['edit_changes']['currency'] = currency_code
+
+    context.user_data["edit_changes"]["currency"] = currency_code
     return await _show_edit_menu(update, context)
 
 
@@ -511,8 +500,8 @@ async def handle_edit_currency(update: Update, context: ContextTypes.DEFAULT_TYP
 # ===================================================================================
 async def _prompt_edit_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for new date."""
-    current = _get_effective_value(context, 'expense_date')
-    
+    current = _get_effective_value(context, "expense_date")
+
     message = (
         "<b>Edit Date</b>\n\n"
         f"Current: {current}\n\n"
@@ -531,31 +520,32 @@ async def handle_edit_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         query = update.callback_query
         await query.answer()
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
             return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.EDIT_DATE
-    
+
     # Handle text input
     date_text = update.message.text.strip().lower()
-    
-    if date_text == 'today':
+
+    if date_text == "today":
         new_date = date.today()
     else:
         try:
-            new_date = datetime.strptime(date_text, '%Y-%m-%d').date()
+            new_date = datetime.strptime(date_text, "%Y-%m-%d").date()
         except ValueError:
             await _send_validation_error(
-                update, context,
+                update,
+                context,
                 "Invalid date format. Please use YYYY-MM-DD (e.g., 2025-01-20) or type 'today'.",
-                ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_DATE)
+                ExpenseKeyboard.get_edit_field_keyboard(ExpenseKeyboard.FIELD_DATE),
             )
             return EditExpenseStates.EDIT_DATE
-    
-    context.user_data['edit_changes']['expense_date'] = new_date
+
+    context.user_data["edit_changes"]["expense_date"] = new_date
     return await _show_edit_menu(update, context)
 
 
@@ -564,9 +554,9 @@ async def handle_edit_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # ===================================================================================
 async def _prompt_edit_payer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for new payer selection."""
-    members = context.user_data.get('edit_group_members', [])
-    current_payer_id = _get_effective_value(context, 'payer_id')
-    
+    members = context.user_data.get("edit_group_members", [])
+    current_payer_id = _get_effective_value(context, "payer_id")
+
     message = "<b>Edit Payer</b>\n\nSelect who paid for this expense:"
     keyboard = ExpenseKeyboard.get_edit_payer_keyboard(members, current_payer_id)
     await _send_or_edit_message(update, context, message, keyboard)
@@ -577,19 +567,19 @@ async def handle_edit_payer(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Handle payer selection."""
     query = update.callback_query
     await query.answer()
-    
+
     action, data = ExpenseKeyboard.extract_callback_info(query.data)
-    
+
     if action == ExpenseKeyboard.ACTION_CANCEL:
         return await cancel_edit(update, context)
     if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
         return await _show_edit_menu(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_SELECT_PAYER:
         payer_id = int(data)
-        context.user_data['edit_changes']['payer_id'] = payer_id
+        context.user_data["edit_changes"]["payer_id"] = payer_id
         return await _show_edit_menu(update, context)
-    
+
     return EditExpenseStates.EDIT_PAYER
 
 
@@ -598,9 +588,9 @@ async def handle_edit_payer(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ===================================================================================
 async def _prompt_edit_participants(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for participant selection."""
-    members = context.user_data.get('edit_group_members', [])
-    selected = context.user_data.get('edit_selected_participants', [])
-    
+    members = context.user_data.get("edit_group_members", [])
+    selected = context.user_data.get("edit_selected_participants", [])
+
     message = (
         "<b>Edit Participants</b>\n\n"
         "Select all participants who are splitting this expense.\n"
@@ -615,70 +605,67 @@ async def handle_edit_participants(update: Update, context: ContextTypes.DEFAULT
     """Handle participant selection."""
     query = update.callback_query
     await query.answer()
-    
+
     action, data = ExpenseKeyboard.extract_callback_info(query.data)
-    
+
     if action == ExpenseKeyboard.ACTION_CANCEL:
         return await cancel_edit(update, context)
     if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
         # Reset selected participants to original
-        original = context.user_data.get('edit_original_data', {})
-        context.user_data['edit_selected_participants'] = [
-            p['user_id'] for p in original.get('participants', [])
+        original = context.user_data.get("edit_original_data", {})
+        context.user_data["edit_selected_participants"] = [
+            p["user_id"] for p in original.get("participants", [])
         ]
         return await _show_edit_menu(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_TOGGLE_PARTICIPANT:
         user_id = int(data)
-        selected = context.user_data.get('edit_selected_participants', [])
-        
+        selected = context.user_data.get("edit_selected_participants", [])
+
         if user_id in selected:
             selected.remove(user_id)
         else:
             selected.append(user_id)
-        
-        context.user_data['edit_selected_participants'] = selected
+
+        context.user_data["edit_selected_participants"] = selected
         return await _prompt_edit_participants(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_DONE_PARTICIPANTS:
-        selected = context.user_data.get('edit_selected_participants', [])
+        selected = context.user_data.get("edit_selected_participants", [])
         if not selected:
             await query.answer("Please select at least one participant.", show_alert=True)
             return EditExpenseStates.EDIT_PARTICIPANTS
-        
-        context.user_data['edit_changes']['participant_ids'] = selected
-        
+
+        context.user_data["edit_changes"]["participant_ids"] = selected
+
         # Check if we need to re-enter split data
-        split_type = _get_effective_value(context, 'split_type')
+        split_type = _get_effective_value(context, "split_type")
         if isinstance(split_type, str):
             split_type = ExpenseSplitType(split_type)
-        
+
         if split_type == ExpenseSplitType.EQUAL:
             # Auto-recalculate for equal split
             return await _show_edit_menu(update, context)
         else:
             # Need to re-enter split values
             if split_type == ExpenseSplitType.EXACT:
-                context.user_data['edit_exact_amounts_pending'] = {
-                    'amounts': {},
-                    'current_index': 0
+                context.user_data["edit_exact_amounts_pending"] = {
+                    "amounts": {},
+                    "current_index": 0,
                 }
                 return await _prompt_exact_amounts(update, context)
             elif split_type == ExpenseSplitType.PERCENTAGE:
-                context.user_data['edit_percentages_pending'] = {
-                    'percentages': {},
-                    'current_index': 0
+                context.user_data["edit_percentages_pending"] = {
+                    "percentages": {},
+                    "current_index": 0,
                 }
                 return await _prompt_percentages(update, context)
             elif split_type == ExpenseSplitType.CUSTOM:
-                context.user_data['edit_custom_shares_pending'] = {
-                    'shares': {},
-                    'current_index': 0
-                }
+                context.user_data["edit_custom_shares_pending"] = {"shares": {}, "current_index": 0}
                 return await _prompt_custom_shares(update, context)
-        
+
         return await _show_edit_menu(update, context)
-    
+
     return EditExpenseStates.EDIT_PARTICIPANTS
 
 
@@ -687,10 +674,10 @@ async def handle_edit_participants(update: Update, context: ContextTypes.DEFAULT
 # ===================================================================================
 async def _prompt_edit_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for split type selection."""
-    current = _get_effective_value(context, 'split_type')
-    if hasattr(current, 'value'):
+    current = _get_effective_value(context, "split_type")
+    if hasattr(current, "value"):
         current = current.value
-    
+
     message = "<b>Edit Split Type</b>\n\nSelect how to split this expense:"
     keyboard = ExpenseKeyboard.get_edit_split_type_keyboard(current)
     await _send_or_edit_message(update, context, message, keyboard)
@@ -701,39 +688,30 @@ async def handle_edit_split_type(update: Update, context: ContextTypes.DEFAULT_T
     """Handle split type selection."""
     query = update.callback_query
     await query.answer()
-    
+
     action, data = ExpenseKeyboard.extract_callback_info(query.data)
-    
+
     if action == ExpenseKeyboard.ACTION_CANCEL:
         return await cancel_edit(update, context)
     if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
         return await _show_edit_menu(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_SELECT_SPLIT:
         split_type = ExpenseSplitType(data)
-        context.user_data['edit_changes']['split_type'] = split_type
-        
+        context.user_data["edit_changes"]["split_type"] = split_type
+
         if split_type == ExpenseSplitType.EQUAL:
             return await _show_edit_menu(update, context)
         elif split_type == ExpenseSplitType.EXACT:
-            context.user_data['edit_exact_amounts_pending'] = {
-                'amounts': {},
-                'current_index': 0
-            }
+            context.user_data["edit_exact_amounts_pending"] = {"amounts": {}, "current_index": 0}
             return await _prompt_exact_amounts(update, context)
         elif split_type == ExpenseSplitType.PERCENTAGE:
-            context.user_data['edit_percentages_pending'] = {
-                'percentages': {},
-                'current_index': 0
-            }
+            context.user_data["edit_percentages_pending"] = {"percentages": {}, "current_index": 0}
             return await _prompt_percentages(update, context)
         elif split_type == ExpenseSplitType.CUSTOM:
-            context.user_data['edit_custom_shares_pending'] = {
-                'shares': {},
-                'current_index': 0
-            }
+            context.user_data["edit_custom_shares_pending"] = {"shares": {}, "current_index": 0}
             return await _prompt_custom_shares(update, context)
-    
+
     return EditExpenseStates.EDIT_SPLIT_TYPE
 
 
@@ -742,7 +720,7 @@ async def handle_edit_split_type(update: Update, context: ContextTypes.DEFAULT_T
 # ===================================================================================
 async def _prompt_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for a new category selection."""
-    current_val = _get_effective_value(context, 'category')
+    current_val = _get_effective_value(context, "category")
     if current_val:
         try:
             current_label = CATEGORY_DISPLAY[ExpenseCategory(current_val)]
@@ -777,9 +755,9 @@ async def handle_edit_category(update: Update, context: ContextTypes.DEFAULT_TYP
         return await _show_edit_menu(update, context)
     if action == ExpenseKeyboard.ACTION_SELECT_CATEGORY:
         if data == "none":
-            context.user_data['edit_changes']['category'] = None
+            context.user_data["edit_changes"]["category"] = None
         else:
-            context.user_data['edit_changes']['category'] = data
+            context.user_data["edit_changes"]["category"] = data
         return await _show_edit_menu(update, context)
 
     return EditExpenseStates.EDIT_CATEGORY
@@ -790,51 +768,48 @@ async def handle_edit_category(update: Update, context: ContextTypes.DEFAULT_TYP
 # ===================================================================================
 async def _prompt_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for exact amounts for each participant."""
-    participant_ids = context.user_data.get('edit_selected_participants', [])
-    if 'participant_ids' in context.user_data.get('edit_changes', {}):
-        participant_ids = context.user_data['edit_changes']['participant_ids']
-    
-    members = context.user_data.get('edit_group_members', [])
-    amount = _get_effective_value(context, 'amount')
-    currency = _get_effective_value(context, 'currency')
-    
-    pending = context.user_data.get('edit_exact_amounts_pending', {
-        'amounts': {},
-        'current_index': 0
-    })
-    current_index = pending['current_index']
-    
+    participant_ids = context.user_data.get("edit_selected_participants", [])
+    if "participant_ids" in context.user_data.get("edit_changes", {}):
+        participant_ids = context.user_data["edit_changes"]["participant_ids"]
+
+    members = context.user_data.get("edit_group_members", [])
+    amount = _get_effective_value(context, "amount")
+    currency = _get_effective_value(context, "currency")
+
+    pending = context.user_data.get(
+        "edit_exact_amounts_pending", {"amounts": {}, "current_index": 0}
+    )
+    current_index = pending["current_index"]
+
     # Check if all amounts collected
     if current_index >= len(participant_ids):
-        amounts_list = [pending['amounts'][pid] for pid in participant_ids]
+        amounts_list = [pending["amounts"][pid] for pid in participant_ids]
         total_entered = sum(amounts_list)
-        
-        if abs(total_entered - Decimal(str(amount))) > Decimal('0.01'):
+
+        if abs(total_entered - Decimal(str(amount))) > Decimal("0.01"):
             await _send_or_edit_message(
-                update, context,
+                update,
+                context,
                 f"<b>Amounts don't match!</b>\n\n"
                 f"Total expense: {currency} {amount}\n"
                 f"Sum of amounts entered: {currency} {total_entered}\n\n"
                 "Please re-enter the amounts.",
-                ExpenseKeyboard.get_edit_field_keyboard('exact')
+                ExpenseKeyboard.get_edit_field_keyboard("exact"),
             )
-            context.user_data['edit_exact_amounts_pending'] = {
-                'amounts': {},
-                'current_index': 0
-            }
+            context.user_data["edit_exact_amounts_pending"] = {"amounts": {}, "current_index": 0}
             return await _prompt_exact_amounts(update, context)
-        
-        context.user_data['edit_changes']['split_data'] = {'amounts': amounts_list}
+
+        context.user_data["edit_changes"]["split_data"] = {"amounts": amounts_list}
         return await _show_edit_menu(update, context)
-    
+
     # Get current participant info
     current_participant_id = participant_ids[current_index]
-    current_member = next((m for m in members if m.get('user_id') == current_participant_id), {})
-    current_name = _get_member_display_name(current_member)
-    
-    entered_so_far = sum(pending['amounts'].values())
+    current_member = next((m for m in members if m.get("user_id") == current_participant_id), {})
+    current_name = get_display_name(current_member)
+
+    entered_so_far = sum(pending["amounts"].values())
     remaining = Decimal(str(amount)) - entered_so_far
-    
+
     message = (
         f"<b>Enter Exact Amounts</b>\n\n"
         f"Total: {currency} {amount}\n"
@@ -842,8 +817,8 @@ async def _prompt_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TY
         f"<b>Enter amount for {current_name}:</b>\n"
         f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>"
     )
-    
-    keyboard = ExpenseKeyboard.get_edit_field_keyboard('exact')
+
+    keyboard = ExpenseKeyboard.get_edit_field_keyboard("exact")
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.ENTER_EXACT_AMOUNTS
 
@@ -854,41 +829,39 @@ async def handle_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYP
         query = update.callback_query
         await query.answer()
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
-            pending = context.user_data.get('edit_exact_amounts_pending', {})
-            current_index = pending.get('current_index', 0)
-            
+            pending = context.user_data.get("edit_exact_amounts_pending", {})
+            current_index = pending.get("current_index", 0)
+
             if current_index > 0:
-                participant_ids = context.user_data.get('edit_selected_participants', [])
-                if 'participant_ids' in context.user_data.get('edit_changes', {}):
-                    participant_ids = context.user_data['edit_changes']['participant_ids']
+                participant_ids = context.user_data.get("edit_selected_participants", [])
+                if "participant_ids" in context.user_data.get("edit_changes", {}):
+                    participant_ids = context.user_data["edit_changes"]["participant_ids"]
                 prev_participant_id = participant_ids[current_index - 1]
-                pending['amounts'].pop(prev_participant_id, None)
-                pending['current_index'] = current_index - 1
+                pending["amounts"].pop(prev_participant_id, None)
+                pending["current_index"] = current_index - 1
                 return await _prompt_exact_amounts(update, context)
             else:
-                context.user_data.pop('edit_exact_amounts_pending', None)
+                context.user_data.pop("edit_exact_amounts_pending", None)
                 return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.ENTER_EXACT_AMOUNTS
-    
+
     # Handle text input
-    pending = context.user_data.get('edit_exact_amounts_pending', {})
-    current_index = pending.get('current_index', 0)
-    
-    already_allocated = sum(pending.get('amounts', {}).values())
-    total_amount = Decimal(str(_get_effective_value(context, 'amount')))
-    currency = _get_effective_value(context, 'currency')
-    
+    pending = context.user_data.get("edit_exact_amounts_pending", {})
+    current_index = pending.get("current_index", 0)
+
+    already_allocated = sum(pending.get("amounts", {}).values())
+    total_amount = Decimal(str(_get_effective_value(context, "amount")))
+    currency = _get_effective_value(context, "currency")
+
     is_valid, error_msg, entered_amount = validate_exact_split_amount(
-        update.message.text,
-        total_amount,
-        already_allocated
+        update.message.text, total_amount, already_allocated
     )
-    
+
     if not is_valid:
         remaining = total_amount - already_allocated
         enhanced_error = (
@@ -898,19 +871,18 @@ async def handle_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYP
             f"Remaining: {currency} {remaining}"
         )
         await _send_validation_error(
-            update, context, enhanced_error,
-            ExpenseKeyboard.get_edit_field_keyboard('exact')
+            update, context, enhanced_error, ExpenseKeyboard.get_edit_field_keyboard("exact")
         )
         return EditExpenseStates.ENTER_EXACT_AMOUNTS
-    
-    participant_ids = context.user_data.get('edit_selected_participants', [])
-    if 'participant_ids' in context.user_data.get('edit_changes', {}):
-        participant_ids = context.user_data['edit_changes']['participant_ids']
-    
+
+    participant_ids = context.user_data.get("edit_selected_participants", [])
+    if "participant_ids" in context.user_data.get("edit_changes", {}):
+        participant_ids = context.user_data["edit_changes"]["participant_ids"]
+
     current_participant_id = participant_ids[current_index]
-    pending['amounts'][current_participant_id] = entered_amount
-    pending['current_index'] = current_index + 1
-    
+    pending["amounts"][current_participant_id] = entered_amount
+    pending["current_index"] = current_index + 1
+
     return await _prompt_exact_amounts(update, context)
 
 
@@ -919,51 +891,48 @@ async def handle_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYP
 # ===================================================================================
 async def _prompt_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for percentages for each participant."""
-    participant_ids = context.user_data.get('edit_selected_participants', [])
-    if 'participant_ids' in context.user_data.get('edit_changes', {}):
-        participant_ids = context.user_data['edit_changes']['participant_ids']
-    
-    members = context.user_data.get('edit_group_members', [])
-    amount = _get_effective_value(context, 'amount')
-    currency = _get_effective_value(context, 'currency')
-    
-    pending = context.user_data.get('edit_percentages_pending', {
-        'percentages': {},
-        'current_index': 0
-    })
-    current_index = pending['current_index']
-    
+    participant_ids = context.user_data.get("edit_selected_participants", [])
+    if "participant_ids" in context.user_data.get("edit_changes", {}):
+        participant_ids = context.user_data["edit_changes"]["participant_ids"]
+
+    members = context.user_data.get("edit_group_members", [])
+    amount = _get_effective_value(context, "amount")
+    currency = _get_effective_value(context, "currency")
+
+    pending = context.user_data.get(
+        "edit_percentages_pending", {"percentages": {}, "current_index": 0}
+    )
+    current_index = pending["current_index"]
+
     # Check if all percentages collected
     if current_index >= len(participant_ids):
-        percentages_list = [pending['percentages'][pid] for pid in participant_ids]
+        percentages_list = [pending["percentages"][pid] for pid in participant_ids]
         total_percentage = sum(percentages_list)
-        
-        if abs(total_percentage - Decimal('100')) > Decimal('0.01'):
+
+        if abs(total_percentage - Decimal("100")) > Decimal("0.01"):
             await _send_or_edit_message(
-                update, context,
+                update,
+                context,
                 f"<b>Percentages don't add up!</b>\n\n"
                 f"Total: 100%\n"
                 f"Sum entered: {total_percentage}%\n\n"
                 "Please re-enter the percentages.",
-                ExpenseKeyboard.get_edit_field_keyboard('percentage')
+                ExpenseKeyboard.get_edit_field_keyboard("percentage"),
             )
-            context.user_data['edit_percentages_pending'] = {
-                'percentages': {},
-                'current_index': 0
-            }
+            context.user_data["edit_percentages_pending"] = {"percentages": {}, "current_index": 0}
             return await _prompt_percentages(update, context)
-        
-        context.user_data['edit_changes']['split_data'] = {'percentages': percentages_list}
+
+        context.user_data["edit_changes"]["split_data"] = {"percentages": percentages_list}
         return await _show_edit_menu(update, context)
-    
+
     # Get current participant info
     current_participant_id = participant_ids[current_index]
-    current_member = next((m for m in members if m.get('user_id') == current_participant_id), {})
-    current_name = _get_member_display_name(current_member)
-    
-    entered_so_far = sum(pending['percentages'].values())
-    remaining = Decimal('100') - entered_so_far
-    
+    current_member = next((m for m in members if m.get("user_id") == current_participant_id), {})
+    current_name = get_display_name(current_member)
+
+    entered_so_far = sum(pending["percentages"].values())
+    remaining = Decimal("100") - entered_so_far
+
     message = (
         f"<b>Enter Percentages</b>\n\n"
         f"Total expense: {currency} {amount}\n"
@@ -972,8 +941,8 @@ async def _prompt_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>\n"
         f"<i>Example: 25 or 33.33</i>"
     )
-    
-    keyboard = ExpenseKeyboard.get_edit_field_keyboard('percentage')
+
+    keyboard = ExpenseKeyboard.get_edit_field_keyboard("percentage")
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.ENTER_PERCENTAGES
 
@@ -984,59 +953,55 @@ async def handle_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE)
         query = update.callback_query
         await query.answer()
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
-            pending = context.user_data.get('edit_percentages_pending', {})
-            current_index = pending.get('current_index', 0)
-            
+            pending = context.user_data.get("edit_percentages_pending", {})
+            current_index = pending.get("current_index", 0)
+
             if current_index > 0:
-                participant_ids = context.user_data.get('edit_selected_participants', [])
-                if 'participant_ids' in context.user_data.get('edit_changes', {}):
-                    participant_ids = context.user_data['edit_changes']['participant_ids']
+                participant_ids = context.user_data.get("edit_selected_participants", [])
+                if "participant_ids" in context.user_data.get("edit_changes", {}):
+                    participant_ids = context.user_data["edit_changes"]["participant_ids"]
                 prev_participant_id = participant_ids[current_index - 1]
-                pending['percentages'].pop(prev_participant_id, None)
-                pending['current_index'] = current_index - 1
+                pending["percentages"].pop(prev_participant_id, None)
+                pending["current_index"] = current_index - 1
                 return await _prompt_percentages(update, context)
             else:
-                context.user_data.pop('edit_percentages_pending', None)
+                context.user_data.pop("edit_percentages_pending", None)
                 return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.ENTER_PERCENTAGES
-    
+
     # Handle text input
-    pending = context.user_data.get('edit_percentages_pending', {})
-    current_index = pending.get('current_index', 0)
-    
-    already_allocated = sum(pending.get('percentages', {}).values())
-    
+    pending = context.user_data.get("edit_percentages_pending", {})
+    current_index = pending.get("current_index", 0)
+
+    already_allocated = sum(pending.get("percentages", {}).values())
+
     is_valid, error_msg, percentage = validate_percentage_split(
-        update.message.text,
-        already_allocated
+        update.message.text, already_allocated
     )
-    
+
     if not is_valid:
-        remaining = Decimal('100') - already_allocated
+        remaining = Decimal("100") - already_allocated
         enhanced_error = (
-            f"{error_msg}\n\n"
-            f"Already allocated: {already_allocated}%\n"
-            f"Remaining: {remaining}%"
+            f"{error_msg}\n\nAlready allocated: {already_allocated}%\nRemaining: {remaining}%"
         )
         await _send_validation_error(
-            update, context, enhanced_error,
-            ExpenseKeyboard.get_edit_field_keyboard('percentage')
+            update, context, enhanced_error, ExpenseKeyboard.get_edit_field_keyboard("percentage")
         )
         return EditExpenseStates.ENTER_PERCENTAGES
-    
-    participant_ids = context.user_data.get('edit_selected_participants', [])
-    if 'participant_ids' in context.user_data.get('edit_changes', {}):
-        participant_ids = context.user_data['edit_changes']['participant_ids']
-    
+
+    participant_ids = context.user_data.get("edit_selected_participants", [])
+    if "participant_ids" in context.user_data.get("edit_changes", {}):
+        participant_ids = context.user_data["edit_changes"]["participant_ids"]
+
     current_participant_id = participant_ids[current_index]
-    pending['percentages'][current_participant_id] = percentage
-    pending['current_index'] = current_index + 1
-    
+    pending["percentages"][current_participant_id] = percentage
+    pending["current_index"] = current_index + 1
+
     return await _prompt_percentages(update, context)
 
 
@@ -1045,34 +1010,33 @@ async def handle_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ===================================================================================
 async def _prompt_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for custom share ratios for each participant."""
-    participant_ids = context.user_data.get('edit_selected_participants', [])
-    if 'participant_ids' in context.user_data.get('edit_changes', {}):
-        participant_ids = context.user_data['edit_changes']['participant_ids']
-    
-    members = context.user_data.get('edit_group_members', [])
-    amount = _get_effective_value(context, 'amount')
-    currency = _get_effective_value(context, 'currency')
-    
-    pending = context.user_data.get('edit_custom_shares_pending', {
-        'shares': {},
-        'current_index': 0
-    })
-    current_index = pending['current_index']
-    
+    participant_ids = context.user_data.get("edit_selected_participants", [])
+    if "participant_ids" in context.user_data.get("edit_changes", {}):
+        participant_ids = context.user_data["edit_changes"]["participant_ids"]
+
+    members = context.user_data.get("edit_group_members", [])
+    amount = _get_effective_value(context, "amount")
+    currency = _get_effective_value(context, "currency")
+
+    pending = context.user_data.get(
+        "edit_custom_shares_pending", {"shares": {}, "current_index": 0}
+    )
+    current_index = pending["current_index"]
+
     # Check if all shares collected
     if current_index >= len(participant_ids):
-        shares_list = [pending['shares'][pid] for pid in participant_ids]
-        context.user_data['edit_changes']['split_data'] = {'shares': shares_list}
+        shares_list = [pending["shares"][pid] for pid in participant_ids]
+        context.user_data["edit_changes"]["split_data"] = {"shares": shares_list}
         return await _show_edit_menu(update, context)
-    
+
     # Get current participant info
     current_participant_id = participant_ids[current_index]
-    current_member = next((m for m in members if m.get('user_id') == current_participant_id), {})
-    current_name = _get_member_display_name(current_member)
-    
-    shares_so_far = list(pending['shares'].values())
+    current_member = next((m for m in members if m.get("user_id") == current_participant_id), {})
+    current_name = get_display_name(current_member)
+
+    shares_so_far = list(pending["shares"].values())
     shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
-    
+
     message = (
         f"<b>Enter Custom Shares</b>\n\n"
         f"Total expense: {currency} {amount}\n"
@@ -1082,8 +1046,8 @@ async def _prompt_custom_shares(update: Update, context: ContextTypes.DEFAULT_TY
         f"<i>Enter a number representing their share ratio.</i>\n"
         f"<i>E.g., if A=1, B=2, C=1, then B pays double.</i>"
     )
-    
-    keyboard = ExpenseKeyboard.get_edit_field_keyboard('custom')
+
+    keyboard = ExpenseKeyboard.get_edit_field_keyboard("custom")
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.ENTER_CUSTOM_SHARES
 
@@ -1094,35 +1058,35 @@ async def handle_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYP
         query = update.callback_query
         await query.answer()
         action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-        
+
         if action == ExpenseKeyboard.ACTION_CANCEL:
             return await cancel_edit(update, context)
         if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
-            pending = context.user_data.get('edit_custom_shares_pending', {})
-            current_index = pending.get('current_index', 0)
-            
+            pending = context.user_data.get("edit_custom_shares_pending", {})
+            current_index = pending.get("current_index", 0)
+
             if current_index > 0:
-                participant_ids = context.user_data.get('edit_selected_participants', [])
-                if 'participant_ids' in context.user_data.get('edit_changes', {}):
-                    participant_ids = context.user_data['edit_changes']['participant_ids']
+                participant_ids = context.user_data.get("edit_selected_participants", [])
+                if "participant_ids" in context.user_data.get("edit_changes", {}):
+                    participant_ids = context.user_data["edit_changes"]["participant_ids"]
                 prev_participant_id = participant_ids[current_index - 1]
-                pending['shares'].pop(prev_participant_id, None)
-                pending['current_index'] = current_index - 1
+                pending["shares"].pop(prev_participant_id, None)
+                pending["current_index"] = current_index - 1
                 return await _prompt_custom_shares(update, context)
             else:
-                context.user_data.pop('edit_custom_shares_pending', None)
+                context.user_data.pop("edit_custom_shares_pending", None)
                 return await _show_edit_menu(update, context)
-        
+
         return EditExpenseStates.ENTER_CUSTOM_SHARES
-    
+
     # Handle text input
-    pending = context.user_data.get('edit_custom_shares_pending', {})
-    current_index = pending.get('current_index', 0)
-    
+    pending = context.user_data.get("edit_custom_shares_pending", {})
+    current_index = pending.get("current_index", 0)
+
     is_valid, error_msg, share = validate_custom_share(update.message.text)
-    
+
     if not is_valid:
-        shares_so_far = list(pending.get('shares', {}).values())
+        shares_so_far = list(pending.get("shares", {}).values())
         shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
         enhanced_error = (
             f"{error_msg}\n\n"
@@ -1130,19 +1094,18 @@ async def handle_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYP
             f"<i>Enter a whole number (1, 2, 3, etc.)</i>"
         )
         await _send_validation_error(
-            update, context, enhanced_error,
-            ExpenseKeyboard.get_edit_field_keyboard('custom')
+            update, context, enhanced_error, ExpenseKeyboard.get_edit_field_keyboard("custom")
         )
         return EditExpenseStates.ENTER_CUSTOM_SHARES
-    
-    participant_ids = context.user_data.get('edit_selected_participants', [])
-    if 'participant_ids' in context.user_data.get('edit_changes', {}):
-        participant_ids = context.user_data['edit_changes']['participant_ids']
-    
+
+    participant_ids = context.user_data.get("edit_selected_participants", [])
+    if "participant_ids" in context.user_data.get("edit_changes", {}):
+        participant_ids = context.user_data["edit_changes"]["participant_ids"]
+
     current_participant_id = participant_ids[current_index]
-    pending['shares'][current_participant_id] = share
-    pending['current_index'] = current_index + 1
-    
+    pending["shares"][current_participant_id] = share
+    pending["current_index"] = current_index + 1
+
     return await _prompt_custom_shares(update, context)
 
 
@@ -1151,96 +1114,112 @@ async def handle_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYP
 # ===================================================================================
 async def _show_edit_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Show summary of changes before saving."""
-    original = context.user_data.get('edit_original_data', {})
-    changes = context.user_data.get('edit_changes', {})
-    members = context.user_data.get('edit_group_members', [])
-    
+    original = context.user_data.get("edit_original_data", {})
+    changes = context.user_data.get("edit_changes", {})
+    members = context.user_data.get("edit_group_members", [])
+
     if not changes:
         await _send_or_edit_message(
-            update, context,
+            update,
+            context,
             "No changes to save.",
-            ExpenseKeyboard.get_edit_menu_keyboard(has_changes=False)
+            ExpenseKeyboard.get_edit_menu_keyboard(has_changes=False),
         )
         return EditExpenseStates.SELECT_FIELD
-    
+
     # Build change summary
     change_lines = []
     for field, new_value in changes.items():
-        if field == 'split_data':
+        if field == "split_data":
             continue
 
         old_value = original.get(field)
         label = FIELD_LABELS.get(field, field)
 
-        if field == 'split_type':
-            new_value = new_value.value.title() if hasattr(new_value, 'value') else str(new_value).title()
-            old_value = old_value.value.title() if hasattr(old_value, 'value') else str(old_value).title()
-        elif field == 'payer_id':
-            old_member = next((m for m in members if m.get('user_id') == old_value), {})
-            new_member = next((m for m in members if m.get('user_id') == new_value), {})
-            old_value = _get_member_display_name(old_member) if old_member else old_value
-            new_value = _get_member_display_name(new_member) if new_member else new_value
-        elif field == 'participant_ids':
+        if field == "split_type":
+            new_value = (
+                new_value.value.title() if hasattr(new_value, "value") else str(new_value).title()
+            )
+            old_value = (
+                old_value.value.title() if hasattr(old_value, "value") else str(old_value).title()
+            )
+        elif field == "payer_id":
+            old_member = next((m for m in members if m.get("user_id") == old_value), {})
+            new_member = next((m for m in members if m.get("user_id") == new_value), {})
+            old_value = get_display_name(old_member) if old_member else old_value
+            new_value = get_display_name(new_member) if new_member else new_value
+        elif field == "participant_ids":
             old_names = [
-                _get_member_display_name(next((m for m in members if m.get('user_id') == p['user_id']), {}))
-                for p in original.get('participants', [])
+                get_display_name(next((m for m in members if m.get("user_id") == p["user_id"]), {}))
+                for p in original.get("participants", [])
             ]
             new_names = [
-                _get_member_display_name(next((m for m in members if m.get('user_id') == pid), {}))
+                get_display_name(next((m for m in members if m.get("user_id") == pid), {}))
                 for pid in new_value
             ]
             old_value = ", ".join(old_names) or "—"
             new_value = ", ".join(new_names) or "—"
-        elif field == 'expense_date' and hasattr(new_value, 'isoformat'):
+        elif field == "expense_date" and hasattr(new_value, "isoformat"):
             new_value = new_value.isoformat()
-        elif field == 'category':
+        elif field == "category":
             old_value = _format_category_label(old_value)
             new_value = _format_category_label(new_value)
+        elif field == "description":
+            old_value = h(old_value)
+            new_value = h(new_value)
 
         change_lines.append(f"  {label}: {old_value} → {new_value}")
 
     # Calculate new breakdown
-    amount = changes.get('amount', original.get('amount'))
-    currency = changes.get('currency', original.get('currency'))
-    split_type = changes.get('split_type', original.get('split_type'))
+    amount = changes.get("amount", original.get("amount"))
+    currency = changes.get("currency", original.get("currency"))
+    split_type = changes.get("split_type", original.get("split_type"))
     if isinstance(split_type, str):
         split_type = ExpenseSplitType(split_type)
-    
-    participant_ids = changes.get('participant_ids', [p['user_id'] for p in original.get('participants', [])])
-    split_data = changes.get('split_data')
-    
+
+    participant_ids = changes.get(
+        "participant_ids", [p["user_id"] for p in original.get("participants", [])]
+    )
+    split_data = changes.get("split_data")
+
     # Calculate shares for display
     try:
         if split_type == ExpenseSplitType.EQUAL:
-            shares = SplitCalculator.calculate_equal_split(Decimal(str(amount)), len(participant_ids))
+            shares = SplitCalculator.calculate_equal_split(
+                Decimal(str(amount)), len(participant_ids)
+            )
         elif split_type == ExpenseSplitType.EXACT and split_data:
-            shares = split_data.get('amounts', [])
+            shares = split_data.get("amounts", [])
         elif split_type == ExpenseSplitType.PERCENTAGE and split_data:
-            shares = SplitCalculator.calculate_percentage_split(Decimal(str(amount)), split_data.get('percentages', []))
+            shares = SplitCalculator.calculate_percentage_split(
+                Decimal(str(amount)), split_data.get("percentages", [])
+            )
         elif split_type == ExpenseSplitType.CUSTOM and split_data:
-            shares = SplitCalculator.calculate_custom_split(Decimal(str(amount)), split_data.get('shares', []))
+            shares = SplitCalculator.calculate_custom_split(
+                Decimal(str(amount)), split_data.get("shares", [])
+            )
         else:
             # Use existing shares from original if no changes
-            shares = [p['share_amount'] for p in original.get('participants', [])]
+            shares = [p["share_amount"] for p in original.get("participants", [])]
     except Exception as e:
         logger.error(f"Error calculating shares for summary: {e}")
-        shares = [Decimal('0')] * len(participant_ids)
-    
+        shares = [Decimal("0")] * len(participant_ids)
+
     # Build breakdown display
     breakdown_lines = []
     for i, pid in enumerate(participant_ids):
-        member = next((m for m in members if m.get('user_id') == pid), {})
-        name = _get_member_display_name(member) if member else f"User {pid}"
-        share = shares[i] if i < len(shares) else Decimal('0')
+        member = next((m for m in members if m.get("user_id") == pid), {})
+        name = get_display_name(member) if member else f"User {pid}"
+        share = shares[i] if i < len(shares) else Decimal("0")
         breakdown_lines.append(f"  {name}: {currency} {share}")
-    
+
     message = (
         "<b>Review Changes</b>\n\n"
         "<b>Changes:</b>\n" + "\n".join(change_lines) + "\n\n"
         "<b>Updated breakdown:</b>\n" + "\n".join(breakdown_lines) + "\n\n"
         "Confirm to save these changes?"
     )
-    
+
     keyboard = ExpenseKeyboard.get_edit_summary_keyboard()
     await _send_or_edit_message(update, context, message, keyboard)
     return EditExpenseStates.SUMMARY
@@ -1250,15 +1229,15 @@ async def handle_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle summary confirmation."""
     query = update.callback_query
     await query.answer()
-    
+
     action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-    
+
     if action == ExpenseKeyboard.ACTION_BACK_TO_EDIT:
         return await _show_edit_menu(update, context)
-    
+
     if action == ExpenseKeyboard.ACTION_CONFIRM:
         return await _save_expense(update, context)
-    
+
     return EditExpenseStates.SUMMARY
 
 
@@ -1269,49 +1248,48 @@ async def _save_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """Save the expense changes to the database."""
     query = update.callback_query
     telegram_user = update.effective_user
-    
-    expense_id = context.user_data.get('edit_expense_id')
-    changes = context.user_data.get('edit_changes', {})
-    
+
+    expense_id = context.user_data.get("edit_expense_id")
+    changes = context.user_data.get("edit_changes", {})
+
     if not expense_id:
         await query.edit_message_text("Error: Expense ID not found. Please try again.")
         _cleanup_conversation(context)
         return ConversationHandler.END
-    
+
     if not changes:
         await query.edit_message_text("No changes to save.")
         _cleanup_conversation(context)
         return ConversationHandler.END
-    
+
     try:
         async with get_db() as db:
-            updated_expense = await ExpenseService.update_expense(
-                db,
-                expense_id,
-                changes,
-                telegram_user.id
-            )
+            await ExpenseService.update_expense(db, expense_id, changes, telegram_user.id)
 
         logger.info(f"User {telegram_user.id} updated expense {expense_id}")
 
         _cleanup_conversation(context)
 
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "View expense",
-                callback_data=ExpenseKeyboard._build_callback_data(
-                    ExpenseKeyboard.ACTION_VIEW_DETAILS, str(expense_id)
-                )
-            )
-        ]])
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "View expense",
+                        callback_data=ExpenseKeyboard._build_callback_data(
+                            ExpenseKeyboard.ACTION_VIEW_DETAILS, str(expense_id)
+                        ),
+                    )
+                ]
+            ]
+        )
         await query.edit_message_text(
             "<b>Expense updated!</b>\n\nYour changes have been saved.",
             parse_mode="HTML",
-            reply_markup=keyboard
+            reply_markup=keyboard,
         )
 
         return ConversationHandler.END
-    
+
     except ExpenseNotFoundException:
         await query.edit_message_text("Expense not found. It may have been deleted.")
     except UnauthorizedActionException as e:
@@ -1321,7 +1299,7 @@ async def _save_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     except Exception as e:
         logger.error(f"Error saving expense changes: {e}", exc_info=True)
         await query.edit_message_text(ERROR_MSG)
-    
+
     _cleanup_conversation(context)
     return ConversationHandler.END
 
@@ -1331,25 +1309,27 @@ async def _save_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # ===================================================================================
 async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel expense editing."""
-    expense_id = context.user_data.get('edit_expense_id')
+    expense_id = context.user_data.get("edit_expense_id")
     _cleanup_conversation(context)
 
     keyboard = None
     if expense_id:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "Back to expense",
-                callback_data=ExpenseKeyboard._build_callback_data(
-                    ExpenseKeyboard.ACTION_VIEW_DETAILS, str(expense_id)
-                )
-            )
-        ]])
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "Back to expense",
+                        callback_data=ExpenseKeyboard._build_callback_data(
+                            ExpenseKeyboard.ACTION_VIEW_DETAILS, str(expense_id)
+                        ),
+                    )
+                ]
+            ]
+        )
 
     message = "Edit cancelled. No changes were saved."
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message, reply_markup=keyboard
-        )
+        await update.callback_query.edit_message_text(message, reply_markup=keyboard)
     else:
         await _cleanup_previous_keyboard(update, context)
         await update.message.reply_text(message, reply_markup=keyboard)
@@ -1366,7 +1346,7 @@ def create_edit_expense_conversation_handler() -> ConversationHandler:
         entry_points=[
             CallbackQueryHandler(
                 start_edit_expense,
-                pattern=f"^{ExpenseKeyboard.PREFIX}{ExpenseKeyboard.ACTION_EDIT}:"
+                pattern=f"^{ExpenseKeyboard.PREFIX}{ExpenseKeyboard.ACTION_EDIT}:",
             )
         ],
         states={
@@ -1375,19 +1355,19 @@ def create_edit_expense_conversation_handler() -> ConversationHandler:
             ],
             EditExpenseStates.EDIT_DESCRIPTION: [
                 CallbackQueryHandler(handle_edit_description, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_description)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_description),
             ],
             EditExpenseStates.EDIT_AMOUNT: [
                 CallbackQueryHandler(handle_edit_amount, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_amount)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_amount),
             ],
             EditExpenseStates.EDIT_CURRENCY: [
                 CallbackQueryHandler(handle_edit_currency, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_currency)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_currency),
             ],
             EditExpenseStates.EDIT_DATE: [
                 CallbackQueryHandler(handle_edit_date, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_date)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_date),
             ],
             EditExpenseStates.EDIT_PAYER: [
                 CallbackQueryHandler(handle_edit_payer, pattern=f"^{ExpenseKeyboard.PREFIX}")
@@ -1403,25 +1383,27 @@ def create_edit_expense_conversation_handler() -> ConversationHandler:
             ],
             EditExpenseStates.ENTER_EXACT_AMOUNTS: [
                 CallbackQueryHandler(handle_exact_amounts, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exact_amounts)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exact_amounts),
             ],
             EditExpenseStates.ENTER_PERCENTAGES: [
                 CallbackQueryHandler(handle_percentages, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_percentages)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_percentages),
             ],
             EditExpenseStates.ENTER_CUSTOM_SHARES: [
                 CallbackQueryHandler(handle_custom_shares, pattern=f"^{ExpenseKeyboard.PREFIX}"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_shares)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_shares),
             ],
             EditExpenseStates.SUMMARY: [
                 CallbackQueryHandler(handle_summary, pattern=f"^{ExpenseKeyboard.PREFIX}")
-            ]
+            ],
         },
         fallbacks=[
-            CallbackQueryHandler(cancel_edit, pattern=f"^{ExpenseKeyboard.PREFIX}{ExpenseKeyboard.ACTION_CANCEL}$")
+            CallbackQueryHandler(
+                cancel_edit, pattern=f"^{ExpenseKeyboard.PREFIX}{ExpenseKeyboard.ACTION_CANCEL}$"
+            )
         ],
         conversation_timeout=CONVERSATION_TIMEOUT,
         name="edit_expense",
         per_chat=True,
-        per_user=True
+        per_user=True,
     )

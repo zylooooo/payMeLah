@@ -5,7 +5,6 @@ including balance sign formatting and the None-stats guard.
 """
 from decimal import Decimal
 
-import pytest
 from bot.handlers.balance_handler import _format_group_balances_message
 
 

@@ -1,21 +1,20 @@
 import logging
 import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 from bot.bot import Bot
-from shared.logger import setup_logging
-from config import AUTO_MIGRATE, ENV, WEBHOOK_URL, PORT
-
-from models import ( # noqa: E402, F401
-    User,
-    Group,
-    GroupMember,
+from config import AUTO_MIGRATE, ENV, PORT, WEBHOOK_URL
+from models import (  # noqa: E402, F401
     Expense,
     ExpenseParticipant,
-    Payment
+    Group,
+    GroupMember,
+    Payment,
+    User,
 )
+from shared.logger import setup_logging
 
 # Set up logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
@@ -31,7 +30,7 @@ def run_alembic_migrations():
     if not AUTO_MIGRATE:
         logger.info("Alembic auto migration is disabled. Skipping database migrations...")
         return
-    
+
     logger.info("Running Alembic database migrations...")
     try:
         result = subprocess.run(
@@ -47,7 +46,7 @@ def run_alembic_migrations():
             logger.info("Applied pending migrations")
         else:
             logger.info("Database is up to date (no pending migrations)")
-            
+
         if result.stdout:
             logger.debug(f"Migration output: {result.stdout}")
     except subprocess.CalledProcessError as e:
@@ -81,7 +80,7 @@ def main():
             logger.info("Starting bot in POLLING mode")
             bot = Bot()
             bot.start()
-    
+
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
         sys.exit(0)

@@ -1,9 +1,9 @@
-import httpx
-from decimal import Decimal
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
 import logging
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Dict
 
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class CurrencyService:
         to_currency = to_currency.upper()
 
         if from_currency == to_currency:
-            return Decimal('1')
+            return Decimal("1")
 
         rates = await cls._get_rates_for_base(from_currency)
 
@@ -54,12 +54,7 @@ class CurrencyService:
         return Decimal(str(rates[to_currency]))
 
     @classmethod
-    async def convert(
-        cls,
-        amount: Decimal,
-        from_currency: str,
-        to_currency: str
-    ) -> Decimal:
+    async def convert(cls, amount: Decimal, from_currency: str, to_currency: str) -> Decimal:
         """
         Convert an amount from one currency to another, rounded to 2 decimal places.
 
@@ -74,21 +69,21 @@ class CurrencyService:
         if from_currency.upper() == to_currency.upper():
             return amount
         rate = await cls.get_rate(from_currency, to_currency)
-        return (amount * rate).quantize(Decimal('0.01'))
+        return (amount * rate).quantize(Decimal("0.01"))
 
     @classmethod
     async def _get_rates_for_base(cls, base: str) -> dict:
         """Return rates for the given base currency, using cache when fresh."""
         cached = _rate_cache.get(base)
         if cached:
-            age = datetime.now(timezone.utc) - cached['fetched_at']
+            age = datetime.now(timezone.utc) - cached["fetched_at"]
             if age < _CACHE_TTL:
                 logger.debug(f"Cache hit for base currency {base}")
-                return cached['rates']
+                return cached["rates"]
 
         logger.info(f"Fetching exchange rates for base currency {base}")
         rates = await cls._fetch_rates(base)
-        _rate_cache[base] = {'rates': rates, 'fetched_at': datetime.now(timezone.utc)}
+        _rate_cache[base] = {"rates": rates, "fetched_at": datetime.now(timezone.utc)}
         return rates
 
     @classmethod
@@ -103,18 +98,18 @@ class CurrencyService:
                     )
                 response.raise_for_status()
                 data = response.json()
-                if data.get('result') != 'success':
-                    error_type = data.get('error-type', 'unknown')
-                    raise ValueError(
-                        f"Exchange rate API error for {base}: {error_type}"
-                    )
-                return data.get('rates', {})
+                if data.get("result") != "success":
+                    error_type = data.get("error-type", "unknown")
+                    raise ValueError(f"Exchange rate API error for {base}: {error_type}")
+                return data.get("rates", {})
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error fetching rates for {base}: {e}")
-            raise ValueError(f"Failed to fetch exchange rates for {base}: HTTP {e.response.status_code}")
+            raise ValueError(
+                f"Failed to fetch exchange rates for {base}: HTTP {e.response.status_code}"
+            ) from e
         except httpx.RequestError as e:
             logger.error(f"Network error fetching rates for {base}: {e}")
-            raise ValueError(f"Network error while fetching exchange rates: {e}")
+            raise ValueError(f"Network error while fetching exchange rates: {e}") from e
 
     @classmethod
     def clear_cache(cls) -> None:

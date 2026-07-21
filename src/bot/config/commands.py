@@ -1,10 +1,6 @@
-from telegram import (
-    BotCommand,
-    Bot,
-    BotCommandScopeAllPrivateChats,
-    BotCommandScopeAllGroupChats
-)
 import logging
+
+from telegram import Bot, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +32,13 @@ async def setup_commands(bot: Bot) -> None:
             PRIVATE_COMMANDS,
             scope=BotCommandScopeAllPrivateChats()
         )
-        
+
         # Set up commands for group chats
         await bot.set_my_commands(
             GROUP_COMMANDS,
             scope=BotCommandScopeAllGroupChats()
         )
-    
+
         logger.info("Bot commands setup successfully")
     except Exception as e:
         logger.error(f"Error setting up bot commands: {e}", exc_info=True)

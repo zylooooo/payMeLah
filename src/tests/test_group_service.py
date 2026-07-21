@@ -2,11 +2,13 @@
 Unit tests for GroupService.update_member_role.
 Tests all authorization rules and valid role transitions without a real database.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from models import GroupMemberRole
 from services.group_service import GroupService
-from shared import UnauthorizedActionException, GroupMemberNotFoundException
+from shared import GroupMemberNotFoundException, UnauthorizedActionException
 
 
 def _make_member_mock(role: GroupMemberRole, user_id: int, group_id: int = 1) -> MagicMock:

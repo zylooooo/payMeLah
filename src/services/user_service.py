@@ -1,11 +1,12 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from models import User
-from typing import Optional, Any
-from datetime import timezone, datetime
-from shared import UserAlreadyExistsException, UserNotFoundException
 import logging
+from datetime import datetime, timezone
+from typing import Any, Optional
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models import User
+from shared import UserAlreadyExistsException, UserNotFoundException
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class UserService:
         Args:
             db: AsyncSession - The database session.
             user_id: int - The Telegram user ID.
-        
+
         Returns:
             dict - The user data if found, None otherwise
         """
@@ -36,7 +37,7 @@ class UserService:
             return None
         logger.info(f"User with ID {user_id} found successfully")
         return user.to_dict()
-    
+
     @staticmethod
     async def create_user(
         db: AsyncSession,
@@ -57,7 +58,7 @@ class UserService:
             username: Optional[str] - The Telegram username.
             first_name: Optional[str] - The Telegram user's first name.
             last_name: Optional[str] - The Telegram user's last name.
-        
+
         Returns:
             dict - The created user data.
         """
@@ -67,7 +68,7 @@ class UserService:
         if existing_user:
             logger.warning(f"User with ID {user_id} already exists, skipping creation")
             raise UserAlreadyExistsException(f"User with ID {user_id} already exists")
-        
+
         # Create the new user
         new_user = User(
             id=user_id,
@@ -98,7 +99,7 @@ class UserService:
             db: AsyncSession - The database session.
             user_id: int - The Telegram user ID.
             update_data: dict[str, Any] - The data to update the user with.
-        
+
         Returns:
             dict - The updated user data.
         """
@@ -111,12 +112,12 @@ class UserService:
         if not user:
             logger.warning(f"User with ID {user_id} not found, skipping update")
             raise UserNotFoundException(f"User with ID {user_id} not found")
-        
+
         # Only update the fields that are provided in the update_data
         for key, value in update_data.items():
             if hasattr(user, key) and value is not None:
                 setattr(user, key, value)
-        
+
         user.updated_at = datetime.now(timezone.utc)
 
         await db.commit()

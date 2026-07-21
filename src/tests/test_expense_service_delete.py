@@ -4,16 +4,17 @@ Tests for expense deletion behavior:
 - Settled expenses still CANNOT be edited.
 - Deletion cascades to participants so live balance computation stays correct.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from sqlalchemy import inspect as sa_inspect
 
-from services.expense_service import ExpenseService
 from models import Expense
+from services.expense_service import ExpenseService
 from shared import (
-    UnauthorizedActionException,
     ExpenseNotEditableException,
     ExpenseNotFoundException,
+    UnauthorizedActionException,
 )
 
 
