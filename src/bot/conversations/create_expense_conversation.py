@@ -25,6 +25,23 @@ from utils import (
     validate_percentage_split,
 )
 
+from .expense_conversation_helpers import (
+    ParticipantValueCollector,
+    handle_participant_value,
+    prompt_participant_value,
+)
+from .expense_conversation_helpers import (
+    cleanup_conversation as _shared_cleanup_conversation,
+)
+from .expense_conversation_helpers import (
+    cleanup_previous_keyboard as _shared_cleanup_previous_keyboard,
+)
+from .expense_conversation_helpers import (
+    send_or_edit_message as _shared_send_or_edit_message,
+)
+from .expense_conversation_helpers import (
+    send_validation_error as _shared_send_validation_error,
+)
 from .states import CreateExpenseStates
 
 logger = logging.getLogger(__name__)
@@ -36,97 +53,43 @@ CONVERSATION_TIMEOUT = 600  # 10 minutes
 # ===================================================================================
 # Helper functions
 # ===================================================================================
+_MESSAGE_KEY = "last_message_id"
+_CLEANUP_KEYS = [
+    "expense_data",
+    "conversation_active",
+    "last_message_id",
+    "group_members",
+    "selected_participants",
+    "user_groups",
+    "chat_groups",
+    "exact_amounts_pending",
+    "percentages_pending",
+    "custom_shares_pending",
+]
+
+
 def _cleanup_conversation(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cleanup conversation state."""
-    keys_to_remove = [
-        "expense_data",
-        "conversation_active",
-        "last_message_id",
-        "group_members",
-        "selected_participants",
-        "user_groups",
-        "chat_groups",
-        "exact_amounts_pending",
-        "percentages_pending",
-        "custom_shares_pending",
-    ]
-    for key in keys_to_remove:
-        context.user_data.pop(key, None)
+    _shared_cleanup_conversation(context, _CLEANUP_KEYS)
 
 
 async def _cleanup_previous_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean up inline keyboard from previous bot message."""
-    message_id = context.user_data.get("last_message_id")
-    # Nothing to clean if no message ID
-    if not message_id:
-        return
-
-    chat_id = update.effective_chat.id
-    try:
-        await context.bot.edit_message_reply_markup(
-            chat_id=chat_id, message_id=message_id, reply_markup=None
-        )
-    except Exception as e:
-        # Clean up failures does not block the conversation, fail silently
-        logger.warning(
-            f"Failed to remove keyboard for message {message_id} in chat {chat_id}: {e}",
-            exc_info=True,
-        )
-        pass
-    finally:
-        context.user_data.pop("last_message_id", None)
+    await _shared_cleanup_previous_keyboard(update, context, _MESSAGE_KEY)
 
 
 async def _send_or_edit_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, keyboard=None
 ) -> None:
     """Unified message handler for both callback queries and text messages."""
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text, parse_mode="HTML", reply_markup=keyboard
-        )
-        context.user_data["last_message_id"] = update.callback_query.message.message_id
-    else:
-        await _cleanup_previous_keyboard(update, context)
-        sent_message = await update.message.reply_text(
-            text, parse_mode="HTML", reply_markup=keyboard
-        )
-        context.user_data["last_message_id"] = sent_message.message_id
+    await _shared_send_or_edit_message(update, context, text, _MESSAGE_KEY, keyboard)
 
 
 async def _send_validation_error(
     update: Update, context: ContextTypes.DEFAULT_TYPE, error_msg: str, keyboard=None
 ) -> None:
-    """
-    Send validation error message with proper keyboard cleanup.
-    Tries to edit the previous message first, falls back to sending new message.
-    """
-    message_id = context.user_data.get("last_message_id")
-    chat_id = update.effective_chat.id
-
-    # Try to edit the previous message if it exists
-    if message_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=error_msg,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
-            # Keep the same message_id - no need to update
-            return
-        except Exception as e:
-            # Edit failed (message too different, deleted, etc.) - fall back to new message
-            logger.debug(f"Failed to edit message {message_id} for validation error: {e}")
-            # Continue to fallback below
-
-    # Fallback: send new message if no previous message or edit failed
-    await _cleanup_previous_keyboard(update, context)
-    sent_message = await update.message.reply_text(
-        error_msg, parse_mode="HTML", reply_markup=keyboard
-    )
-    context.user_data["last_message_id"] = sent_message.message_id
+    """Send validation error message with proper keyboard cleanup."""
+    await _shared_send_validation_error(update, context, error_msg, _MESSAGE_KEY, keyboard)
 
 
 # ===================================================================================
@@ -277,8 +240,8 @@ async def _prompt_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "<i>E.g. SGD, MYR, USD etc.</i>\n\n"
         f"If you wish to use the default currency of the group: <b>{currency}</b>, press 'Skip'"
     )
-    keyboard = ExpenseKeyboard.get_navigation_keyboard(
-        current_field="currency", is_first=False, show_skip=True
+    keyboard = ExpenseKeyboard.get_field_navigation_keyboard(
+        "currency", show_skip=True, show_back=True, back_with_field=True
     )
     await _send_or_edit_message(update, context, message, keyboard)
     return CreateExpenseStates.SELECT_CURRENCY
@@ -306,8 +269,8 @@ async def handle_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             update,
             context,
             error_msg,
-            ExpenseKeyboard.get_navigation_keyboard(
-                current_field="currency", is_first=False, show_skip=True
+            ExpenseKeyboard.get_field_navigation_keyboard(
+                "currency", show_skip=True, show_back=True, back_with_field=True
             ),
         )
         return CreateExpenseStates.SELECT_CURRENCY
@@ -327,8 +290,8 @@ async def _prompt_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Enter the expense amount in <b>{currency}</b>:\n"
         "<i>Example: 25.50</i>"
     )
-    keyboard = ExpenseKeyboard.get_navigation_keyboard(
-        current_field="amount", is_first=False, show_skip=False
+    keyboard = ExpenseKeyboard.get_field_navigation_keyboard(
+        "amount", show_back=True, back_with_field=True
     )
     await _send_or_edit_message(update, context, message, keyboard)
     return CreateExpenseStates.AMOUNT
@@ -357,8 +320,8 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             update,
             context,
             error_msg,
-            ExpenseKeyboard.get_navigation_keyboard(
-                current_field="amount", is_first=False, show_skip=False
+            ExpenseKeyboard.get_field_navigation_keyboard(
+                "amount", show_back=True, back_with_field=True
             ),
         )
         return CreateExpenseStates.AMOUNT
@@ -377,8 +340,8 @@ async def _prompt_description(update: Update, context: ContextTypes.DEFAULT_TYPE
         "What is this expense for?\n"
         "<i>Example: Dinner with friends (I don't have any friends 😭)</i>"
     )
-    keyboard = ExpenseKeyboard.get_navigation_keyboard(
-        current_field="description", is_first=False, show_skip=True
+    keyboard = ExpenseKeyboard.get_field_navigation_keyboard(
+        "description", show_skip=True, show_back=True, back_with_field=True
     )
     await _send_or_edit_message(update, context, message, keyboard)
     return CreateExpenseStates.DESCRIPTION
@@ -409,8 +372,8 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
             update,
             context,
             error_msg,
-            ExpenseKeyboard.get_navigation_keyboard(
-                current_field="description", is_first=False, show_skip=True
+            ExpenseKeyboard.get_field_navigation_keyboard(
+                "description", show_skip=True, show_back=True, back_with_field=True
             ),
         )
         return CreateExpenseStates.DESCRIPTION
@@ -611,385 +574,253 @@ async def handle_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ===================================================================================
 # State: ENTER_EXACT_AMOUNTS
 # ===================================================================================
-async def _prompt_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Prompt user to enter exact amounts for each participant."""
-    participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-    members = context.user_data.get("group_members", [])
+def _exact_amounts_participant_ids(context: ContextTypes.DEFAULT_TYPE) -> list:
+    return context.user_data["expense_data"].get("participant_ids", [])
+
+
+def _exact_amounts_validate(context, text, already_allocated):
+    total_amount = context.user_data["expense_data"].get("amount", Decimal("0"))
+    return validate_exact_split_amount(text, total_amount, already_allocated)
+
+
+def _exact_amounts_build_prompt(context, current_name, current_index, total_count, pending):
     amount = context.user_data["expense_data"].get("amount", Decimal("0"))
     currency = context.user_data["expense_data"].get("currency", "SGD")
-
-    # Initialize pending amounts tracker if not exists
-    if "exact_amounts_pending" not in context.user_data:
-        context.user_data["exact_amounts_pending"] = {"amounts": {}, "current_index": 0}
-
-    pending = context.user_data["exact_amounts_pending"]
-    current_index = pending["current_index"]
-
-    # Check if all amounts have been collected
-    if current_index >= len(participant_ids):
-        # All amounts collected, validate total
-        amounts_list = [pending["amounts"][pid] for pid in participant_ids]
-        total_entered = sum(amounts_list)
-
-        if abs(total_entered - amount) > Decimal("0.01"):
-            # Amounts don't match total - show error and reset
-            await _send_or_edit_message(
-                update,
-                context,
-                f"<b>Amounts don't match!</b>\n\n"
-                f"Total expense: {currency} {amount}\n"
-                f"Sum of amounts entered: {currency} {total_entered}\n\n"
-                "Please re-enter the amounts.",
-                ExpenseKeyboard.get_navigation_keyboard("exact", is_first=False),
-            )
-            # Reset and start over
-            context.user_data["exact_amounts_pending"] = {"amounts": {}, "current_index": 0}
-            return await _prompt_exact_amounts(update, context)
-
-        # Store split data and proceed to summary
-        context.user_data["expense_data"]["split_data"] = {"amounts": amounts_list}
-        return await _show_summary(update, context)
-
-    # Get current participant info
-    current_participant_id = participant_ids[current_index]
-    current_member = next((m for m in members if m.get("user_id") == current_participant_id), {})
-    current_name = get_display_name(current_member)
-
-    # Calculate remaining amount
     entered_so_far = sum(pending["amounts"].values())
     remaining = amount - entered_so_far
-
-    message = (
+    return (
         f"<b>Enter Exact Amounts</b>\n\n"
         f"Total: {currency} {amount}\n"
         f"Remaining: {currency} {remaining}\n\n"
         f"<b>Enter amount for {current_name}:</b>\n"
-        f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>"
+        f"<i>({current_index + 1} of {total_count} participants)</i>"
     )
 
-    keyboard = ExpenseKeyboard.get_navigation_keyboard("exact", is_first=False)
-    await _send_or_edit_message(update, context, message, keyboard)
-    return CreateExpenseStates.ENTER_EXACT_AMOUNTS
+
+def _exact_amounts_build_error(context, error_msg, pending):
+    total_amount = context.user_data["expense_data"].get("amount", Decimal("0"))
+    currency = context.user_data["expense_data"].get("currency", "SGD")
+    already_allocated = sum(pending.get("amounts", {}).values())
+    remaining = total_amount - already_allocated
+    return (
+        f"{error_msg}\n\n"
+        f"Total: {currency} {total_amount}\n"
+        f"Already allocated: {currency} {already_allocated}\n"
+        f"Remaining: {currency} {remaining}"
+    )
+
+
+def _exact_amounts_check_completion(context, values_list):
+    total_entered = sum(values_list)
+    amount = context.user_data["expense_data"].get("amount", Decimal("0"))
+    currency = context.user_data["expense_data"].get("currency", "SGD")
+    if abs(total_entered - amount) > Decimal("0.01"):
+        return (
+            f"<b>Amounts don't match!</b>\n\n"
+            f"Total expense: {currency} {amount}\n"
+            f"Sum of amounts entered: {currency} {total_entered}\n\n"
+            "Please re-enter the amounts."
+        )
+    return None
+
+
+async def _exact_amounts_on_complete(update, context, values_list):
+    context.user_data["expense_data"]["split_data"] = {"amounts": values_list}
+    return await _show_summary(update, context)
+
+
+_EXACT_AMOUNTS_CONFIG = ParticipantValueCollector(
+    pending_key="exact_amounts_pending",
+    values_key="amounts",
+    message_key=_MESSAGE_KEY,
+    collecting_state=CreateExpenseStates.ENTER_EXACT_AMOUNTS,
+    back_action=ExpenseKeyboard.ACTION_BACK,
+    get_participant_ids=_exact_amounts_participant_ids,
+    get_members=lambda context: context.user_data.get("group_members", []),
+    validate=_exact_amounts_validate,
+    build_keyboard=lambda: ExpenseKeyboard.get_field_navigation_keyboard(
+        "exact", show_back=True, back_with_field=True
+    ),
+    build_prompt_text=_exact_amounts_build_prompt,
+    build_error_text=_exact_amounts_build_error,
+    check_completion=_exact_amounts_check_completion,
+    on_complete=_exact_amounts_on_complete,
+    on_back_to_start=lambda update, context: _prompt_split_type(update, context),
+    cancel_fn=lambda update, context: cancel_expense(update, context),
+)
+
+
+async def _prompt_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt user to enter exact amounts for each participant."""
+    return await prompt_participant_value(update, context, _EXACT_AMOUNTS_CONFIG)
 
 
 async def handle_exact_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle exact amount input for each participant."""
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-
-        if action == ExpenseKeyboard.ACTION_CANCEL:
-            return await cancel_expense(update, context)
-        if action == ExpenseKeyboard.ACTION_BACK:
-            pending = context.user_data.get("exact_amounts_pending", {})
-            current_index = pending.get("current_index", 0)
-
-            if current_index > 0:
-                # Go back to previous participant
-                participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-                prev_participant_id = participant_ids[current_index - 1]
-
-                # Remove the previous amount
-                pending["amounts"].pop(prev_participant_id, None)
-                pending["current_index"] = current_index - 1
-
-                return await _prompt_exact_amounts(update, context)
-            else:
-                # Go back to split type selection
-                context.user_data.pop("exact_amounts_pending", None)
-                return await _prompt_split_type(update, context)
-
-        return CreateExpenseStates.ENTER_EXACT_AMOUNTS
-
-    # Handle text input - validate against total and remaining amount
-    pending = context.user_data.get("exact_amounts_pending", {})
-    current_index = pending.get("current_index", 0)
-
-    # Calculate already allocated amount
-    already_allocated = sum(pending.get("amounts", {}).values())
-    total_amount = context.user_data["expense_data"].get("amount", Decimal("0"))
-    currency = context.user_data["expense_data"].get("currency", "SGD")
-
-    is_valid, error_msg, entered_amount = validate_exact_split_amount(
-        update.message.text, total_amount, already_allocated
-    )
-
-    if not is_valid:
-        # Enhance error message with context
-        remaining = total_amount - already_allocated
-        enhanced_error = (
-            f"{error_msg}\n\n"
-            f"Total: {currency} {total_amount}\n"
-            f"Already allocated: {currency} {already_allocated}\n"
-            f"Remaining: {currency} {remaining}"
-        )
-        await _send_validation_error(
-            update,
-            context,
-            enhanced_error,
-            ExpenseKeyboard.get_navigation_keyboard("exact", is_first=False),
-        )
-        return CreateExpenseStates.ENTER_EXACT_AMOUNTS
-
-    # Store the amount for this participant
-    participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-    current_participant_id = participant_ids[current_index]
-
-    pending["amounts"][current_participant_id] = entered_amount
-    pending["current_index"] = current_index + 1
-
-    # Continue to next participant or summary
-    return await _prompt_exact_amounts(update, context)
+    return await handle_participant_value(update, context, _EXACT_AMOUNTS_CONFIG)
 
 
 # ===================================================================================
 # State: ENTER_PERCENTAGES
 # ===================================================================================
-async def _prompt_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Prompt user to enter percentages for each participant."""
-    participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-    members = context.user_data.get("group_members", [])
+def _percentages_participant_ids(context: ContextTypes.DEFAULT_TYPE) -> list:
+    return context.user_data["expense_data"].get("participant_ids", [])
+
+
+def _percentages_validate(context, text, already_allocated):
+    return validate_percentage_split(text, already_allocated)
+
+
+def _percentages_build_prompt(context, current_name, current_index, total_count, pending):
     amount = context.user_data["expense_data"].get("amount", Decimal("0"))
     currency = context.user_data["expense_data"].get("currency", "SGD")
-
-    # Initialize pending percentages tracker if not exists
-    if "percentages_pending" not in context.user_data:
-        context.user_data["percentages_pending"] = {"percentages": {}, "current_index": 0}
-
-    pending = context.user_data["percentages_pending"]
-    current_index = pending["current_index"]
-
-    # Check if all percentages have been collected
-    if current_index >= len(participant_ids):
-        # All percentages collected, validate total equals 100%
-        percentages_list = [pending["percentages"][pid] for pid in participant_ids]
-        total_percentage = sum(percentages_list)
-
-        if abs(total_percentage - Decimal("100")) > Decimal("0.01"):
-            # Percentages don't sum to 100% - show error and reset
-            await _send_or_edit_message(
-                update,
-                context,
-                f"<b>Percentages don't add up!</b>\n\n"
-                f"Total: 100%\n"
-                f"Sum entered: {total_percentage}%\n\n"
-                "Please re-enter the percentages.",
-                ExpenseKeyboard.get_navigation_keyboard("percentage", is_first=False),
-            )
-            # Reset and start over
-            context.user_data["percentages_pending"] = {"percentages": {}, "current_index": 0}
-            return await _prompt_percentages(update, context)
-
-        # Store split data and proceed to summary
-        context.user_data["expense_data"]["split_data"] = {"percentages": percentages_list}
-        return await _show_summary(update, context)
-
-    # Get current participant info
-    current_participant_id = participant_ids[current_index]
-    current_member = next((m for m in members if m.get("user_id") == current_participant_id), {})
-    current_name = get_display_name(current_member)
-
-    # Calculate remaining percentage
     entered_so_far = sum(pending["percentages"].values())
     remaining = Decimal("100") - entered_so_far
-
-    message = (
+    return (
         f"<b>Enter Percentages</b>\n\n"
         f"Total expense: {currency} {amount}\n"
         f"Remaining: {remaining}%\n\n"
         f"<b>Enter percentage for {current_name}:</b>\n"
-        f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>\n"
+        f"<i>({current_index + 1} of {total_count} participants)</i>\n"
         f"<i>Example: 25 or 33.33</i>"
     )
 
-    keyboard = ExpenseKeyboard.get_navigation_keyboard("percentage", is_first=False)
-    await _send_or_edit_message(update, context, message, keyboard)
-    return CreateExpenseStates.ENTER_PERCENTAGES
+
+def _percentages_build_error(context, error_msg, pending):
+    already_allocated = sum(pending.get("percentages", {}).values())
+    remaining = Decimal("100") - already_allocated
+    return (
+        f"⚠️ {error_msg}\n\n"
+        f"<b>Enter Percentages</b>\n\n"
+        f"Already allocated: {already_allocated}%\n"
+        f"Remaining: {remaining}%"
+    )
+
+
+def _percentages_check_completion(context, values_list):
+    total_entered = sum(values_list)
+    if abs(total_entered - Decimal("100")) > Decimal("0.01"):
+        return (
+            f"<b>Percentages don't add up!</b>\n\n"
+            f"Total: 100%\n"
+            f"Sum entered: {total_entered}%\n\n"
+            "Please re-enter the percentages."
+        )
+    return None
+
+
+async def _percentages_on_complete(update, context, values_list):
+    context.user_data["expense_data"]["split_data"] = {"percentages": values_list}
+    return await _show_summary(update, context)
+
+
+_PERCENTAGES_CONFIG = ParticipantValueCollector(
+    pending_key="percentages_pending",
+    values_key="percentages",
+    message_key=_MESSAGE_KEY,
+    collecting_state=CreateExpenseStates.ENTER_PERCENTAGES,
+    back_action=ExpenseKeyboard.ACTION_BACK,
+    get_participant_ids=_percentages_participant_ids,
+    get_members=lambda context: context.user_data.get("group_members", []),
+    validate=_percentages_validate,
+    build_keyboard=lambda: ExpenseKeyboard.get_field_navigation_keyboard(
+        "percentage", show_back=True, back_with_field=True
+    ),
+    build_prompt_text=_percentages_build_prompt,
+    build_error_text=_percentages_build_error,
+    check_completion=_percentages_check_completion,
+    on_complete=_percentages_on_complete,
+    on_back_to_start=lambda update, context: _prompt_split_type(update, context),
+    cancel_fn=lambda update, context: cancel_expense(update, context),
+)
+
+
+async def _prompt_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt user to enter percentages for each participant."""
+    return await prompt_participant_value(update, context, _PERCENTAGES_CONFIG)
 
 
 async def handle_percentages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle percentage input for each participant."""
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-
-        if action == ExpenseKeyboard.ACTION_CANCEL:
-            return await cancel_expense(update, context)
-        if action == ExpenseKeyboard.ACTION_BACK:
-            pending = context.user_data.get("percentages_pending", {})
-            current_index = pending.get("current_index", 0)
-
-            if current_index > 0:
-                # Go back to previous participant
-                participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-                prev_participant_id = participant_ids[current_index - 1]
-
-                # Remove the previous percentage
-                pending["percentages"].pop(prev_participant_id, None)
-                pending["current_index"] = current_index - 1
-
-                return await _prompt_percentages(update, context)
-            else:
-                # Go back to split type selection
-                context.user_data.pop("percentages_pending", None)
-                return await _prompt_split_type(update, context)
-
-        return CreateExpenseStates.ENTER_PERCENTAGES
-
-    # Handle text input
-    pending = context.user_data.get("percentages_pending", {})
-    current_index = pending.get("current_index", 0)
-
-    # Calculate already allocated percentage
-    already_allocated = sum(pending.get("percentages", {}).values())
-
-    is_valid, error_msg, percentage = validate_percentage_split(
-        update.message.text, already_allocated
-    )
-
-    if not is_valid:
-        # Enhance error message with context
-        remaining = Decimal("100") - already_allocated
-        enhanced_error = (
-            f"⚠️ {error_msg}\n\n"
-            f"<b>Enter Percentages</b>\n\n"
-            f"Already allocated: {already_allocated}%\n"
-            f"Remaining: {remaining}%"
-        )
-        await _send_validation_error(
-            update,
-            context,
-            enhanced_error,
-            ExpenseKeyboard.get_navigation_keyboard("percentage", is_first=False),
-        )
-        return CreateExpenseStates.ENTER_PERCENTAGES
-
-    # Store the percentage for this participant
-    participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-    current_participant_id = participant_ids[current_index]
-
-    pending["percentages"][current_participant_id] = percentage
-    pending["current_index"] = current_index + 1
-
-    # Continue to next participant or summary
-    return await _prompt_percentages(update, context)
+    return await handle_participant_value(update, context, _PERCENTAGES_CONFIG)
 
 
 # ===================================================================================
 # State: ENTER_CUSTOM_SHARES
 # ===================================================================================
-async def _prompt_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Prompt user to enter custom share ratios for each participant."""
-    participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-    members = context.user_data.get("group_members", [])
+def _custom_shares_participant_ids(context: ContextTypes.DEFAULT_TYPE) -> list:
+    return context.user_data["expense_data"].get("participant_ids", [])
+
+
+def _custom_shares_validate(context, text, already_allocated):
+    return validate_custom_share(text)
+
+
+def _custom_shares_build_prompt(context, current_name, current_index, total_count, pending):
     amount = context.user_data["expense_data"].get("amount", Decimal("0"))
     currency = context.user_data["expense_data"].get("currency", "SGD")
-
-    # Initialize pending shares tracker if not exists
-    if "custom_shares_pending" not in context.user_data:
-        context.user_data["custom_shares_pending"] = {"shares": {}, "current_index": 0}
-
-    pending = context.user_data["custom_shares_pending"]
-    current_index = pending["current_index"]
-
-    # Check if all shares have been collected
-    if current_index >= len(participant_ids):
-        # All shares collected, store and proceed to summary
-        shares_list = [pending["shares"][pid] for pid in participant_ids]
-
-        # Store split data
-        context.user_data["expense_data"]["split_data"] = {"shares": shares_list}
-        return await _show_summary(update, context)
-
-    # Get current participant info
-    current_participant_id = participant_ids[current_index]
-    current_member = next((m for m in members if m.get("user_id") == current_participant_id), {})
-    current_name = get_display_name(current_member)
-
-    # Show entered shares so far
     shares_so_far = list(pending["shares"].values())
     shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
-
-    message = (
+    return (
         f"<b>Enter Custom Shares</b>\n\n"
         f"Total expense: {currency} {amount}\n"
         f"Shares entered: {shares_display}\n\n"
         f"<b>Enter share for {current_name}:</b>\n"
-        f"<i>({current_index + 1} of {len(participant_ids)} participants)</i>\n\n"
+        f"<i>({current_index + 1} of {total_count} participants)</i>\n\n"
         f"<i>Enter a number representing their share ratio.</i>\n"
         f"<i>E.g., if A=1, B=2, C=1, then B pays double.</i>"
     )
 
-    keyboard = ExpenseKeyboard.get_navigation_keyboard("custom", is_first=False)
-    await _send_or_edit_message(update, context, message, keyboard)
-    return CreateExpenseStates.ENTER_CUSTOM
+
+def _custom_shares_build_error(context, error_msg, pending):
+    shares_so_far = list(pending.get("shares", {}).values())
+    shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
+    return (
+        f"⚠️ {error_msg}\n\n"
+        f"<b>Enter Custom Shares</b>\n\n"
+        f"Shares entered so far: {shares_display}\n"
+        f"<i>Enter a whole number (1, 2, 3, etc.)</i>"
+    )
+
+
+def _custom_shares_check_completion(context, values_list):
+    return None
+
+
+async def _custom_shares_on_complete(update, context, values_list):
+    context.user_data["expense_data"]["split_data"] = {"shares": values_list}
+    return await _show_summary(update, context)
+
+
+_CUSTOM_SHARES_CONFIG = ParticipantValueCollector(
+    pending_key="custom_shares_pending",
+    values_key="shares",
+    message_key=_MESSAGE_KEY,
+    collecting_state=CreateExpenseStates.ENTER_CUSTOM,
+    back_action=ExpenseKeyboard.ACTION_BACK,
+    get_participant_ids=_custom_shares_participant_ids,
+    get_members=lambda context: context.user_data.get("group_members", []),
+    validate=_custom_shares_validate,
+    build_keyboard=lambda: ExpenseKeyboard.get_field_navigation_keyboard(
+        "custom", show_back=True, back_with_field=True
+    ),
+    build_prompt_text=_custom_shares_build_prompt,
+    build_error_text=_custom_shares_build_error,
+    check_completion=_custom_shares_check_completion,
+    on_complete=_custom_shares_on_complete,
+    on_back_to_start=lambda update, context: _prompt_split_type(update, context),
+    cancel_fn=lambda update, context: cancel_expense(update, context),
+)
+
+
+async def _prompt_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt user to enter custom share ratios for each participant."""
+    return await prompt_participant_value(update, context, _CUSTOM_SHARES_CONFIG)
 
 
 async def handle_custom_shares(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle custom share ratio input for each participant."""
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        action, _ = ExpenseKeyboard.extract_callback_info(query.data)
-
-        if action == ExpenseKeyboard.ACTION_CANCEL:
-            return await cancel_expense(update, context)
-        if action == ExpenseKeyboard.ACTION_BACK:
-            pending = context.user_data.get("custom_shares_pending", {})
-            current_index = pending.get("current_index", 0)
-
-            if current_index > 0:
-                # Go back to previous participant
-                participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-                prev_participant_id = participant_ids[current_index - 1]
-
-                # Remove the previous share
-                pending["shares"].pop(prev_participant_id, None)
-                pending["current_index"] = current_index - 1
-
-                return await _prompt_custom_shares(update, context)
-            else:
-                # Go back to split type selection
-                context.user_data.pop("custom_shares_pending", None)
-                return await _prompt_split_type(update, context)
-
-        return CreateExpenseStates.ENTER_CUSTOM
-
-    # Handle text input
-    pending = context.user_data.get("custom_shares_pending", {})
-    current_index = pending.get("current_index", 0)
-
-    is_valid, error_msg, share = validate_custom_share(update.message.text)
-
-    if not is_valid:
-        # Enhance error message with context
-        shares_so_far = list(pending.get("shares", {}).values())
-        shares_display = ", ".join(str(s) for s in shares_so_far) if shares_so_far else "None yet"
-        enhanced_error = (
-            f"⚠️ {error_msg}\n\n"
-            f"<b>Enter Custom Shares</b>\n\n"
-            f"Shares entered so far: {shares_display}\n"
-            f"<i>Enter a whole number (1, 2, 3, etc.)</i>"
-        )
-        await _send_validation_error(
-            update,
-            context,
-            enhanced_error,
-            ExpenseKeyboard.get_navigation_keyboard("custom", is_first=False),
-        )
-        return CreateExpenseStates.ENTER_CUSTOM
-
-    # Store the share for this participant
-    participant_ids = context.user_data["expense_data"].get("participant_ids", [])
-    current_participant_id = participant_ids[current_index]
-
-    pending["shares"][current_participant_id] = share
-    pending["current_index"] = current_index + 1
-
-    # Continue to next participant or summary
-    return await _prompt_custom_shares(update, context)
+    return await handle_participant_value(update, context, _CUSTOM_SHARES_CONFIG)
 
 
 # ===================================================================================

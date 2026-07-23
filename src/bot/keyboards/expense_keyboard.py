@@ -96,54 +96,55 @@ class ExpenseKeyboard:
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
-    def get_payer_selection_keyboard(cls, members: List[dict]) -> InlineKeyboardMarkup:
+    def get_payer_selection_keyboard(
+        cls,
+        members: List[dict],
+        *,
+        current_payer_id: Optional[int] = None,
+        back_action: Optional[str] = None,
+    ) -> InlineKeyboardMarkup:
         """Keyboard for selecting who paid."""
+        if back_action is None:
+            back_action = cls.ACTION_BACK
         buttons = []
-
         for member in members:
-            display_name = (
-                member.get("first_name")
-                or member.get("username")
-                or f"User {member.get('user_id')}"
-            )
+            user_id = member.get("user_id")
+            display_name = member.get("first_name") or member.get("username") or f"User {user_id}"
+            prefix = "(current) " if user_id == current_payer_id else ""
             buttons.append(
                 [
                     InlineKeyboardButton(
-                        display_name,
+                        f"{prefix}{display_name}",
                         callback_data=cls._build_callback_data(
-                            cls.ACTION_SELECT_PAYER, str(member.get("user_id"))
+                            cls.ACTION_SELECT_PAYER, str(user_id)
                         ),
                     )
                 ]
             )
-
         buttons.append(
             [
                 InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK)
+                    "<< Back", callback_data=cls._build_callback_data(back_action)
                 ),
                 InlineKeyboardButton(
                     "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
                 ),
             ]
         )
-
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
     def get_participant_selection_keyboard(
-        cls, members: List[dict], selected_ids: List[int]
+        cls, members: List[dict], selected_ids: List[int], *, back_action: Optional[str] = None
     ) -> InlineKeyboardMarkup:
         """Keyboard for multi-selecting participants with checkmarks."""
+        if back_action is None:
+            back_action = cls.ACTION_BACK
         buttons = []
-
         for member in members:
             user_id = member.get("user_id")
             display_name = member.get("first_name") or member.get("username") or f"User {user_id}"
-
-            # Add checkmark if selected
             prefix = "✓ " if user_id in selected_ids else ""
-
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -154,8 +155,6 @@ class ExpenseKeyboard:
                     )
                 ]
             )
-
-        # Done button (only if at least one selected)
         action_buttons = []
         if selected_ids:
             action_buttons.append(
@@ -164,33 +163,39 @@ class ExpenseKeyboard:
                     callback_data=cls._build_callback_data(cls.ACTION_DONE_PARTICIPANTS),
                 )
             )
-
         buttons.append(
             action_buttons
             if action_buttons
             else [InlineKeyboardButton("Select at least 1 participant", callback_data="noop")]
         )
-
         buttons.append(
             [
                 InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK)
+                    "<< Back", callback_data=cls._build_callback_data(back_action)
                 ),
                 InlineKeyboardButton(
                     "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
                 ),
             ]
         )
-
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
-    def get_split_type_keyboard(cls) -> InlineKeyboardMarkup:
+    def get_split_type_keyboard(
+        cls, *, current_split_type: Optional[str] = None, back_action: Optional[str] = None
+    ) -> InlineKeyboardMarkup:
         """Keyboard for selecting split type."""
+        if back_action is None:
+            back_action = cls.ACTION_BACK
+
+        def label(text: str, split_type_value: str) -> str:
+            prefix = "(current) " if current_split_type == split_type_value else ""
+            return f"{prefix}{text}"
+
         buttons = [
             [
                 InlineKeyboardButton(
-                    "Split Equally",
+                    label("Split Equally", ExpenseSplitType.EQUAL.value),
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SELECT_SPLIT, ExpenseSplitType.EQUAL.value
                     ),
@@ -198,7 +203,7 @@ class ExpenseKeyboard:
             ],
             [
                 InlineKeyboardButton(
-                    "Exact Amounts",
+                    label("Exact Amounts", ExpenseSplitType.EXACT.value),
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SELECT_SPLIT, ExpenseSplitType.EXACT.value
                     ),
@@ -206,7 +211,7 @@ class ExpenseKeyboard:
             ],
             [
                 InlineKeyboardButton(
-                    "By Percentage",
+                    label("By Percentage", ExpenseSplitType.PERCENTAGE.value),
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SELECT_SPLIT, ExpenseSplitType.PERCENTAGE.value
                     ),
@@ -214,7 +219,7 @@ class ExpenseKeyboard:
             ],
             [
                 InlineKeyboardButton(
-                    "Custom Shares",
+                    label("Custom Shares", ExpenseSplitType.CUSTOM.value),
                     callback_data=cls._build_callback_data(
                         cls.ACTION_SELECT_SPLIT, ExpenseSplitType.CUSTOM.value
                     ),
@@ -222,7 +227,7 @@ class ExpenseKeyboard:
             ],
             [
                 InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK)
+                    "<< Back", callback_data=cls._build_callback_data(back_action)
                 ),
                 InlineKeyboardButton(
                     "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
@@ -333,28 +338,31 @@ class ExpenseKeyboard:
         )
 
     @classmethod
-    def get_navigation_keyboard(
-        cls, current_field: str, is_first: bool = False, show_skip: bool = False
+    def get_field_navigation_keyboard(
+        cls,
+        field: str,
+        *,
+        show_skip: bool = False,
+        show_back: bool = True,
+        back_with_field: bool = False,
+        back_action: Optional[str] = None,
     ) -> InlineKeyboardMarkup:
-        """Navigation keyboard for text input fields."""
+        """Navigation keyboard for text-input fields (used by both create and edit flows)."""
+        if back_action is None:
+            back_action = cls.ACTION_BACK
         buttons = []
-
-        if not is_first:
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        "<< Back",
-                        callback_data=cls._build_callback_data(cls.ACTION_BACK, current_field),
-                    )
-                ]
+        if show_back:
+            back_data = (
+                cls._build_callback_data(back_action, field)
+                if back_with_field
+                else cls._build_callback_data(back_action)
             )
-
+            buttons.append([InlineKeyboardButton("<< Back", callback_data=back_data)])
         bottom_row = []
         if show_skip:
             bottom_row.append(
                 InlineKeyboardButton(
-                    ">> Skip",
-                    callback_data=cls._build_callback_data(cls.ACTION_SKIP, current_field),
+                    ">> Skip", callback_data=cls._build_callback_data(cls.ACTION_SKIP, field)
                 )
             )
         bottom_row.append(
@@ -363,7 +371,6 @@ class ExpenseKeyboard:
             )
         )
         buttons.append(bottom_row)
-
         return InlineKeyboardMarkup(buttons)
 
     @classmethod
@@ -635,201 +642,6 @@ class ExpenseKeyboard:
                 )
             ]
         )
-
-        return InlineKeyboardMarkup(buttons)
-
-    @classmethod
-    def get_edit_field_keyboard(cls, field: str, show_skip: bool = False) -> InlineKeyboardMarkup:
-        """
-        Navigation keyboard for editing a specific field.
-
-        Args:
-            field: str - The field being edited (for back navigation context).
-            show_skip: bool - Whether to show skip button (for optional fields).
-        """
-        buttons = []
-
-        # Back to edit menu
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_EDIT)
-                )
-            ]
-        )
-
-        bottom_row = []
-        if show_skip:
-            bottom_row.append(
-                InlineKeyboardButton(
-                    ">> Skip", callback_data=cls._build_callback_data(cls.ACTION_SKIP, field)
-                )
-            )
-        bottom_row.append(
-            InlineKeyboardButton(
-                "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
-            )
-        )
-        buttons.append(bottom_row)
-
-        return InlineKeyboardMarkup(buttons)
-
-    @classmethod
-    def get_edit_payer_keyboard(
-        cls, members: List[dict], current_payer_id: Optional[int] = None
-    ) -> InlineKeyboardMarkup:
-        """
-        Keyboard for selecting a new payer during edit.
-
-        Args:
-            members: List[dict] - Group members to select from.
-            current_payer_id: Optional[int] - Current payer ID to highlight.
-        """
-        buttons = []
-
-        for member in members:
-            user_id = member.get("user_id")
-            display_name = member.get("first_name") or member.get("username") or f"User {user_id}"
-
-            # Mark current payer
-            prefix = "(current) " if user_id == current_payer_id else ""
-
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        f"{prefix}{display_name}",
-                        callback_data=cls._build_callback_data(
-                            cls.ACTION_SELECT_PAYER, str(user_id)
-                        ),
-                    )
-                ]
-            )
-
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_EDIT)
-                ),
-                InlineKeyboardButton(
-                    "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
-                ),
-            ]
-        )
-
-        return InlineKeyboardMarkup(buttons)
-
-    @classmethod
-    def get_edit_participants_keyboard(
-        cls, members: List[dict], selected_ids: List[int]
-    ) -> InlineKeyboardMarkup:
-        """
-        Keyboard for multi-selecting participants during edit.
-        Same as create but with back to edit menu.
-        """
-        buttons = []
-
-        for member in members:
-            user_id = member.get("user_id")
-            display_name = member.get("first_name") or member.get("username") or f"User {user_id}"
-
-            prefix = "[x] " if user_id in selected_ids else "[ ] "
-
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        f"{prefix}{display_name}",
-                        callback_data=cls._build_callback_data(
-                            cls.ACTION_TOGGLE_PARTICIPANT, str(user_id)
-                        ),
-                    )
-                ]
-            )
-
-        # Done button
-        action_buttons = []
-        if selected_ids:
-            action_buttons.append(
-                InlineKeyboardButton(
-                    f"Done ({len(selected_ids)} selected)",
-                    callback_data=cls._build_callback_data(cls.ACTION_DONE_PARTICIPANTS),
-                )
-            )
-
-        buttons.append(
-            action_buttons
-            if action_buttons
-            else [InlineKeyboardButton("Select at least 1 participant", callback_data="noop")]
-        )
-
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_EDIT)
-                ),
-                InlineKeyboardButton(
-                    "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
-                ),
-            ]
-        )
-
-        return InlineKeyboardMarkup(buttons)
-
-    @classmethod
-    def get_edit_split_type_keyboard(
-        cls, current_split_type: Optional[str] = None
-    ) -> InlineKeyboardMarkup:
-        """
-        Keyboard for selecting split type during edit.
-
-        Args:
-            current_split_type: Optional[str] - Current split type to highlight.
-        """
-
-        def get_prefix(split_type_value: str) -> str:
-            return "(current) " if current_split_type == split_type_value else ""
-
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    f"{get_prefix(ExpenseSplitType.EQUAL.value)}Split Equally",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_SELECT_SPLIT, ExpenseSplitType.EQUAL.value
-                    ),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{get_prefix(ExpenseSplitType.EXACT.value)}Exact Amounts",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_SELECT_SPLIT, ExpenseSplitType.EXACT.value
-                    ),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{get_prefix(ExpenseSplitType.PERCENTAGE.value)}By Percentage",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_SELECT_SPLIT, ExpenseSplitType.PERCENTAGE.value
-                    ),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{get_prefix(ExpenseSplitType.CUSTOM.value)}Custom Shares",
-                    callback_data=cls._build_callback_data(
-                        cls.ACTION_SELECT_SPLIT, ExpenseSplitType.CUSTOM.value
-                    ),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "<< Back", callback_data=cls._build_callback_data(cls.ACTION_BACK_TO_EDIT)
-                ),
-                InlineKeyboardButton(
-                    "X Cancel", callback_data=cls._build_callback_data(cls.ACTION_CANCEL)
-                ),
-            ],
-        ]
 
         return InlineKeyboardMarkup(buttons)
 
