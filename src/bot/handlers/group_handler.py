@@ -50,6 +50,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Store groups in user context for pagination
             context.user_data["user_groups"] = groups
             context.user_data["groups_page"] = 0
+            context.user_data["groups_archived_view"] = False
 
             message = _format_groups_list_message(groups, page=0)
             keyboard = GroupKeyboard.get_group_list_keyboard(
@@ -239,7 +240,12 @@ async def handle_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 message = _format_groups_list_message(groups, page=page)
                 context.user_data["groups_page"] = page
 
-            keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
+            keyboard = GroupKeyboard.get_group_list_keyboard(
+                groups,
+                page=page,
+                show_archived_button=not is_group_chat
+                and not context.user_data.get("groups_archived_view"),
+            )
 
             await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
         except Exception as e:
@@ -447,29 +453,29 @@ async def _handle_back_to_list(
         )
         keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
     else:
-        # Private chat context - use user_data
-        groups = context.user_data.get("user_groups", [])
-        page = context.user_data.get("groups_page", 0)
-
-        if not groups:
-            # Re-fetch groups if expired
-            try:
-                async with get_db() as db:
-                    groups = await GroupService.get_all_groups_by_user_id(db, user_id)
-                    context.user_data["user_groups"] = groups
-                    context.user_data["groups_page"] = 0
-                    page = 0
-            except Exception as e:
-                logger.error(f"Error fetching groups: {e}", exc_info=True)
-                await query.edit_message_text("Failed to load groups. Please use /groups again.")
-                return
+        # Private chat context - always re-fetch so archive/unarchive/leave show up
+        try:
+            async with get_db() as db:
+                groups = await GroupService.get_all_groups_by_user_id(db, user_id)
+        except Exception as e:
+            logger.error(f"Error fetching groups: {e}", exc_info=True)
+            await query.edit_message_text("Failed to load groups. Please use /groups again.")
+            return
 
         if not groups:
             await query.edit_message_text("You are not a member of any groups yet.")
             return
 
+        last_page = (len(groups) - 1) // 5
+        page = min(context.user_data.get("groups_page", 0), last_page)
+        context.user_data["user_groups"] = groups
+        context.user_data["groups_page"] = page
+        context.user_data["groups_archived_view"] = False
+
         message = _format_groups_list_message(groups, page=page)
-        keyboard = GroupKeyboard.get_group_list_keyboard(groups, page=page)
+        keyboard = GroupKeyboard.get_group_list_keyboard(
+            groups, page=page, show_archived_button=True
+        )
 
     await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
 
@@ -1094,6 +1100,7 @@ async def _handle_view_archived(query, context: ContextTypes.DEFAULT_TYPE, user_
 
         context.user_data["user_groups"] = archived
         context.user_data["groups_page"] = 0
+        context.user_data["groups_archived_view"] = True
 
         message = _format_groups_list_message(
             archived,
