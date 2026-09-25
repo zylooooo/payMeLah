@@ -21,3 +21,12 @@ class UnauthorizedGroupJoinException(Exception):
 class UnauthorizedActionException(Exception):
     """Exception raised when a user tries to perform an unauthorized action."""
     pass
+
+
+class OutstandingBalanceException(Exception):
+    """Raised when a member with a non-zero balance tries to leave or is removed."""
+
+    def __init__(self, amount, currency: str):
+        self.amount = amount  # positive = they are owed, negative = they owe
+        self.currency = currency
+        super().__init__(f"Member has an outstanding balance of {amount} {currency}.")

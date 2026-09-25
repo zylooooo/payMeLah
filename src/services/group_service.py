@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import List, Optional
 
 from sqlalchemy import and_, select
@@ -10,6 +11,7 @@ from shared import (
     GroupMemberAlreadyExistsException,
     GroupMemberNotFoundException,
     GroupNotFoundException,
+    OutstandingBalanceException,
     UnauthorizedActionException,
     UnauthorizedGroupJoinException,
     UserNotFoundException,
@@ -351,6 +353,8 @@ class GroupService:
                 "Group owners cannot leave. Transfer ownership or delete the group instead."
             )
 
+        await GroupService.assert_settled(db, group_id, user_id)
+
         await db.delete(member)
         await db.commit()
         logger.info(f"User {user_id} left group {group_id} successfully")
@@ -411,6 +415,8 @@ class GroupService:
             raise UnauthorizedActionException(
                 "You cannot remove yourself. Use the leave group option instead."
             )
+
+        await GroupService.assert_settled(db, group_id, user_id_to_remove)
 
         await db.delete(target_member)
         await db.commit()
@@ -484,6 +490,72 @@ class GroupService:
         return target_member.to_dict()
 
     @staticmethod
+    async def get_member_balance(db: AsyncSession, group_id: int, user_id: int):
+        """
+        Return (net_balance, currency) for a current member, in the group's default currency.
+        Positive = they are owed money, negative = they owe money.
+        """
+        # Lazy import: BalanceService imports GroupService.
+        from services.balance_service import BalanceService
+
+        balances = await BalanceService.get_group_balances(db, group_id, user_id)
+        member = next((m for m in balances["members"] if m["user_id"] == user_id), None)
+        return (member["balance"] if member else 0), balances["currency"]
+
+    @staticmethod
+    async def assert_settled(db: AsyncSession, group_id: int, user_id: int) -> None:
+        """
+        Raise OutstandingBalanceException if the member's balance is not zero.
+        Members must settle up before leaving or being removed, otherwise their
+        debts stay in the group attached to someone nobody can settle with.
+        """
+        balance, currency = await GroupService.get_member_balance(db, group_id, user_id)
+        if abs(balance) >= Decimal("0.01"):
+            raise OutstandingBalanceException(balance, currency)
+
+    @staticmethod
+    async def transfer_ownership(
+        db: AsyncSession, group_id: int, new_owner_id: int, requesting_user_id: int
+    ) -> None:
+        """
+        Make another member the owner. The current owner becomes an admin.
+
+        Raises:
+            UnauthorizedActionException - requester is not the owner, or targets themselves.
+            GroupMemberNotFoundException - target is not a member.
+        """
+        logger.info(
+            f"User {requesting_user_id} transferring ownership of group {group_id} to {new_owner_id}"
+        )
+
+        if new_owner_id == requesting_user_id:
+            raise UnauthorizedActionException("You are already the owner.")
+
+        result = await db.execute(
+            select(GroupMember).where(
+                and_(
+                    GroupMember.group_id == group_id,
+                    GroupMember.user_id.in_([requesting_user_id, new_owner_id]),
+                )
+            )
+        )
+        members = {m.user_id: m for m in result.scalars().all()}
+        requester = members.get(requesting_user_id)
+        target = members.get(new_owner_id)
+
+        if not requester or requester.role != GroupMemberRole.OWNER:
+            raise UnauthorizedActionException("Only the group owner can transfer ownership.")
+        if not target:
+            raise GroupMemberNotFoundException(
+                f"User {new_owner_id} is not a member of group {group_id}."
+            )
+
+        target.role = GroupMemberRole.OWNER
+        requester.role = GroupMemberRole.ADMIN
+        await db.commit()
+        logger.info(f"Ownership of group {group_id} transferred to {new_owner_id}")
+
+    @staticmethod
     async def _set_archive_state(
         db: AsyncSession, group_id: int, requesting_user_id: int, is_archived: bool
     ) -> dict:
@@ -501,7 +573,6 @@ class GroupService:
             raise GroupNotFoundException(f"Group {group_id} not found.")
 
         group.is_archived = is_archived
-        group.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(group)
         logger.info(f"Group {group_id} {verb}d by user {requesting_user_id}")
@@ -577,7 +648,6 @@ class GroupService:
             raise GroupNotFoundException(f"Group {group_id} not found")
 
         group.simplify_debts = simplify_debts
-        group.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(group)
         logger.info(f"Updated simplify_debts for group {group_id}")

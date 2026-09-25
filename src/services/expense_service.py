@@ -835,9 +835,6 @@ class ExpenseService:
         if "split_type" in update_data:
             expense.split_type = update_data["split_type"]
 
-        # Update timestamp
-        expense.updated_at = datetime.now(timezone.utc)
-
         # Check if expense should be marked as settled
         # (all participants settled, which happens if only participant is payer)
         await db.flush()

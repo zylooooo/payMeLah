@@ -27,9 +27,7 @@ class UserService:
             dict - The user data if found, None otherwise
         """
         logger.info(f"Getting user by ID: {user_id}")
-        result = await db.execute(
-            select(User).where(User.id == user_id)
-        )
+        result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -44,7 +42,7 @@ class UserService:
         user_id: int,
         username: Optional[str],
         first_name: Optional[str],
-        last_name: Optional[str]
+        last_name: Optional[str],
     ) -> dict:
         """
         Create a new user.
@@ -75,9 +73,9 @@ class UserService:
             username=username,
             first_name=first_name,
             last_name=last_name,
-            preferred_currency='SGD',
+            preferred_currency="SGD",
             created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc)
+            updated_at=datetime.now(timezone.utc),
         )
 
         db.add(new_user)
@@ -87,11 +85,7 @@ class UserService:
         return new_user.to_dict()
 
     @staticmethod
-    async def update_user(
-        db: AsyncSession,
-        user_id: int,
-        update_data: dict[str, Any]
-    ) -> dict:
+    async def update_user(db: AsyncSession, user_id: int, update_data: dict[str, Any]) -> dict:
         """
         Update a user's details. Namely updating their first name, last name and preferred currency.
 
@@ -105,9 +99,7 @@ class UserService:
         """
         logger.info(f"Updating user with ID: {user_id}")
         # Check if the user exists
-        result = await db.execute(
-            select(User).where(User.id == user_id)
-        )
+        result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if not user:
             logger.warning(f"User with ID {user_id} not found, skipping update")
@@ -117,8 +109,6 @@ class UserService:
         for key, value in update_data.items():
             if hasattr(user, key) and value is not None:
                 setattr(user, key, value)
-
-        user.updated_at = datetime.now(timezone.utc)
 
         await db.commit()
         await db.refresh(user)

@@ -8,6 +8,7 @@ from shared.exceptions.group_exceptions import (
     GroupMemberAlreadyExistsException,
     GroupMemberNotFoundException,
     GroupNotFoundException,
+    OutstandingBalanceException,
     UnauthorizedActionException,
     UnauthorizedGroupJoinException,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "GroupMemberNotFoundException",
     "UnauthorizedGroupJoinException",
     "UnauthorizedActionException",
+    "OutstandingBalanceException",
     "InvalidSplitException",
     "ExpenseNotFoundException",
     "ExpenseValidationException",
