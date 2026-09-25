@@ -108,9 +108,10 @@ class GroupKeyboard:
         cls,
         group_id: int,
         user_role: Optional[GroupMemberRole] = None,
-        simplify_debts: bool = True,
-        is_archived: bool = False,
-        member_count: int = 0,
+        *,
+        simplify_debts: bool,
+        is_archived: bool,
+        member_count: int,
     ) -> InlineKeyboardMarkup:
         """
         Generate keyboard for group actions based on user's role.
@@ -129,7 +130,9 @@ class GroupKeyboard:
             [
                 InlineKeyboardButton(
                     f"👥 Members ({member_count})",
-                    callback_data=cls._build_callback_data(cls.ACTION_VIEW_MEMBERS, f"{group_id}:0"),
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_VIEW_MEMBERS, f"{group_id}:0"
+                    ),
                 )
             ]
         )
@@ -438,14 +441,18 @@ class GroupKeyboard:
             nav.append(
                 InlineKeyboardButton(
                     "<< Prev",
-                    callback_data=cls._build_callback_data(cls.ACTION_VIEW_MEMBERS, f"{group_id}:{page - 1}"),
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_VIEW_MEMBERS, f"{group_id}:{page - 1}"
+                    ),
                 )
             )
         if page < total_pages - 1:
             nav.append(
                 InlineKeyboardButton(
                     "Next >>",
-                    callback_data=cls._build_callback_data(cls.ACTION_VIEW_MEMBERS, f"{group_id}:{page + 1}"),
+                    callback_data=cls._build_callback_data(
+                        cls.ACTION_VIEW_MEMBERS, f"{group_id}:{page + 1}"
+                    ),
                 )
             )
         if nav:

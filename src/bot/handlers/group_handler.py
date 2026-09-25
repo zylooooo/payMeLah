@@ -1029,7 +1029,11 @@ async def _handle_toggle_simplify(
 
         message = _format_group_details(updated_group, members, member_role=member_role)
         keyboard = GroupKeyboard.get_group_actions_keyboard(
-            group_id, member_role, simplify_debts=updated_group.get("simplify_debts", True)
+            group_id,
+            member_role,
+            simplify_debts=updated_group.get("simplify_debts", True),
+            is_archived=updated_group.get("is_archived", False),
+            member_count=len(members),
         )
         await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
     except UnauthorizedActionException:
@@ -1060,6 +1064,7 @@ async def _handle_archive_toggle(
             member_role,
             simplify_debts=updated_group.get("simplify_debts", True),
             is_archived=updated_group.get("is_archived", False),
+            member_count=len(members),
         )
         await query.answer(f"Group {verb}.", show_alert=False)
         await query.edit_message_text(message, parse_mode="HTML", reply_markup=keyboard)
